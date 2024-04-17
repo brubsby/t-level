@@ -3,8 +3,8 @@ import logging
 import re
 import argparse
 import sys
-import sqlite3
 import os
+import sqlite3
 
 # to build the binary, download pyinstaller with:
 # pip install -U pyinstaller
@@ -55,6 +55,8 @@ def get_failure_probabilities(b1, curves, param):
     f = []
     if (math.isinf(b1) or math.isinf(curves)):
         return f
+    c.execute(f"SELECT MAX(B1) FROM ecm_probs WHERE B1 <= ? AND param = ?", (b1, param))
+    b1 = c.fetchone()[0]
     c.execute(f"SELECT curves FROM ecm_probs WHERE B1 = ? AND param = ? ORDER BY curves ASC", (b1, param))
     return list(map(lambda m: pow(1.0 - (1.0/m), curves), map(lambda x: x[0], c.fetchall())))
 
