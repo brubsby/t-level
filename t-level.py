@@ -138,6 +138,20 @@ if __name__ == "__main__":
         return get_t_level(c_at_b1_strings)
 
 
+    def get_t_level_curves(t_level):
+        c.execute("SELECT b1, curves, MIN(ABS(curves - 5000)) FROM ecm_probs WHERE param = 1 AND digits = ?",
+                  (max(10,min(math.floor(t_level)-2, 100)),))
+        b1, curves, _ = c.fetchone()
+        curves = int(curves) if curves else 1
+        for n in range(1, 4):
+            this_t = get_t_level(((curves, b1, 1),))
+            logging.debug(f"order {n} t-level estimation: {curves: >4}@{b1} = t{this_t}")
+            if n >= 3:
+                return f"{curves}@{b1}"
+            diff = t_level - this_t
+            curves = max(1, int(curves * pow(2, diff / 2)))
+
+
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=f"       echo <curve_string>[;<curve_string>][...] | %(prog)s [options]\n"
@@ -181,7 +195,7 @@ if __name__ == "__main__":
         "-t",
         "--t-level",
         action="store",
-        dest="previous_work",
+        dest="t_level",
         type=float,
         help="existing t-level to add work to"
     )
@@ -211,25 +225,29 @@ if __name__ == "__main__":
         loglevel = logging.DEBUG
     logging.basicConfig(level=loglevel, format="%(message)s")
 
-    curve_input = ""
+    curve_inputs = []
     if args.expression:
-        curve_input = args.expression
+        curve_inputs.append(args.expression)
     if not sys.stdin.isatty():
-        curve_input += f"\n{sys.stdin.read().strip()}"
+        curve_inputs.append(sys.stdin.read().strip())
     if args.filename:
         try:
             file_input = pathlib.Path(args.filename).read_text().strip()
             # logging.debug(file_input)
-            curve_input += f"\n{file_input}"
+            curve_inputs.append(file_input)
         except FileNotFoundError as e:
             logging.error(e)
             sys.exit(1)
-    if not curve_input and sys.stdin.isatty():
+    if not curve_inputs and sys.stdin.isatty():
         parser.print_help()
         sys.exit(1)
 
+    if args.t_level:
+        curve_inputs.append(get_t_level_curves(args.t_level))
+
+    input_string = "\n".join(curve_inputs).strip()
     try:
-        lines = re.split(r'(?:;|\r?\n)', curve_input.strip())
+        lines = re.split(r'(?:;|\r?\n)', input_string)
         logging.debug(lines)
         parsed_lines = list(map(parse_line, lines))
         line_validations = list(map(validate_line, zip(lines, parsed_lines)))
