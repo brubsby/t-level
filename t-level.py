@@ -5,6 +5,7 @@ import argparse
 import sys
 import os
 import sqlite3
+import pathlib
 
 # to build the binary, download pyinstaller with:
 # pip install -U pyinstaller
@@ -93,7 +94,7 @@ def get_t_level(curve_b1_tuples):
 
 if __name__ == "__main__":
     __license__ = "MIT"
-    __version__ = "0.9.2"
+    __version__ = "0.9.3"
 
     def sci_int(x):
         if x is None or type(x) in [int]:
@@ -119,7 +120,7 @@ if __name__ == "__main__":
         B2 = sci_int(match.group(3))
         if param is None:
             param = sci_int(match.group(4)) if match.group(4) else 1
-        logging.info(f"Curve string \"{line.strip()}\" parsed as curves={curves}, B1={B1}, B2={B2}, param={param}")
+        logging.info(f"Curve string: {line.strip(): <20} parsed as param={param} curves={curves: <5} B1={B1: <15} B2={B2}")
         return curves, B1, B2, param
 
 
@@ -142,6 +143,7 @@ if __name__ == "__main__":
         description=f"       echo <curve_string>[;<curve_string>][...] | %(prog)s [options]\n"
                     f"       printf <curve_string>[\\\\n<curve_string>][...] | %(prog)s [options]\n"
                     f"       %(prog)s [options] < <input_file>\n"
+                    f"       %(prog)s [options] -q\"<curve_string>[;<curve_string>][...]\"\n"
                     f"\n"
                     f"<curve_string> must full match the regex:\n"
                     f"  {line_regex}\n"
@@ -150,6 +152,39 @@ if __name__ == "__main__":
                     f"          5208@11e6,35e9,p=3\n"
                     f"          5208@B1=11e6,B2=35e9,param=0\n"
                     f"and multiple curve strings must be delimited by semicolons or newlines.")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version="%(prog)s (version {version})".format(version=__version__))
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="verbosity (-v, -vv, etc)")
+    parser.add_argument(
+        "-q",
+        type=str,
+        action="store",
+        dest="expression",
+        help="direct curve strings expression input",
+    )
+    parser.add_argument(
+        "-i",
+        "--input",
+        type=str,
+        action="store",
+        dest="filename",
+        help="curve strings file input",
+    )
+    parser.add_argument(
+        "-t",
+        "--t-level",
+        action="store",
+        dest="previous_work",
+        type=float,
+        help="existing t-level to add work to"
+    )
     parser.add_argument(
         "-p",
         "--param",
@@ -167,21 +202,7 @@ if __name__ == "__main__":
         type=int,
         help="t-level decimal precision to display"
     )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="count",
-        default=0,
-        help="verbosity (-v, -vv, etc)")
-    parser.add_argument(
-        "--version",
-        action="version",
-        version="%(prog)s (version {version})".format(version=__version__))
     args = parser.parse_args()
-
-    if sys.stdin.isatty():
-        parser.print_help()
-        sys.exit(1)
 
     loglevel = logging.WARNING
     if args.verbose > 0:
@@ -190,9 +211,26 @@ if __name__ == "__main__":
         loglevel = logging.DEBUG
     logging.basicConfig(level=loglevel, format="%(message)s")
 
+    curve_input = ""
+    if args.expression:
+        curve_input = args.expression
+    if not sys.stdin.isatty():
+        curve_input += f"\n{sys.stdin.read().strip()}"
+    if args.filename:
+        try:
+            file_input = pathlib.Path(args.filename).read_text().strip()
+            # logging.debug(file_input)
+            curve_input += f"\n{file_input}"
+        except FileNotFoundError as e:
+            logging.error(e)
+            sys.exit(1)
+    if not curve_input and sys.stdin.isatty():
+        parser.print_help()
+        sys.exit(1)
+
     try:
-        stdinput = sys.stdin.read().strip()
-        lines = re.split(r'(?:;|\r?\n)', stdinput)
+        lines = re.split(r'(?:;|\r?\n)', curve_input.strip())
+        logging.debug(lines)
         parsed_lines = list(map(parse_line, lines))
         line_validations = list(map(validate_line, zip(lines, parsed_lines)))
         logging.debug(f"Validations: {line_validations}")
