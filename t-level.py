@@ -62,7 +62,7 @@ def get_failure_probabilities(b1, curves, param):
     return list(map(lambda m: pow(1.0 - (1.0/m), curves), map(lambda x: x[0], c.fetchall())))
 
 
-def get_t_level(curve_b1_tuples):
+def get_t_level_and_efs(curve_b1_tuples):
 
     if len(curve_b1_tuples) == 0:
         return 0.0
@@ -88,13 +88,26 @@ def get_t_level(curve_b1_tuples):
         total_sp = [1.0 - fp for fp in total_fp]
 
     total_dp = get_differential_probability(total_fp)
-    diff = get_expected_factor_size(total_dp)
-    return diff
+    t_level = 0
+    efs = get_expected_factor_size(total_dp)
+
+    t_level_threshold = math.exp(-1)
+    for i in range(1, len(total_fp)):
+        if total_fp[i] > t_level_threshold:
+            y1 = total_fp[i-1]
+            y2 = total_fp[i]
+            m = y2 - y1
+            y = t_level_threshold
+            b = y2 - m * (i + 10)
+            t_level = (y - b) / m
+            break
+
+    return t_level, efs
 
 
 if __name__ == "__main__":
     __license__ = "MIT"
-    __version__ = "0.9.3"
+    __version__ = "0.9.4"
 
     def sci_int(x):
         if x is None or type(x) in [int]:
@@ -133,22 +146,22 @@ if __name__ == "__main__":
         return True
 
 
-    def convert_lines_to_t_level(parsed_lines):
+    def convert_lines_to_t_level_and_efs(parsed_lines):
         c_at_b1_strings = list(map(lambda line: (line[0], line[1], line[3]), parsed_lines))
-        return get_t_level(c_at_b1_strings)
+        return get_t_level_and_efs(c_at_b1_strings)
 
 
-    def get_t_level_curves(t_level):
-        c.execute("SELECT b1, curves, MIN(ABS(curves - 5000)) FROM ecm_probs WHERE param = 1 AND digits = ?",
-                  (max(10,min(math.floor(t_level)-2, 100)),))
+    def get_t_level_curves(t_level, precision):
+        c.execute("SELECT b1, curves, MIN(ABS(curves - 10000)) FROM ecm_probs WHERE param = 1 AND digits = ?",
+                  (max(10, min(round(t_level), 100)),))
         b1, curves, _ = c.fetchone()
         curves = int(curves) if curves else 1
-        for n in range(1, 4):
-            this_t = get_t_level(((curves, b1, 1),))
+        for n in range(1, 10):
+            this_t, _ = convert_lines_to_t_level_and_efs(((curves, b1, None, 1),))
             logging.debug(f"order {n} t-level estimation: {curves: >4}@{b1} = t{this_t}")
-            if n >= 3:
-                return f"{curves}@{b1}"
             diff = t_level - this_t
+            if n >= 9 or abs(diff) < pow(10, -precision):
+                return f"{curves}@{b1}"
             curves = max(1, int(curves * pow(2, diff / 2)))
 
 
@@ -157,6 +170,7 @@ if __name__ == "__main__":
         description=f"       echo <curve_string>[;<curve_string>][...] | %(prog)s [options]\n"
                     f"       printf <curve_string>[\\\\n<curve_string>][...] | %(prog)s [options]\n"
                     f"       %(prog)s [options] < <input_file>\n"
+                    f"       %(prog)s [options] -i <input_file>\n"
                     f"       %(prog)s [options] -q\"<curve_string>[;<curve_string>][...]\"\n"
                     f"\n"
                     f"<curve_string> must full match the regex:\n"
@@ -192,12 +206,12 @@ if __name__ == "__main__":
         help="curve strings file input",
     )
     parser.add_argument(
-        "-t",
-        "--t-level",
+        "-w",
+        "--work",
         action="store",
-        dest="t_level",
+        dest="work",
         type=float,
-        help="existing t-level to add work to"
+        help="existing t-level of work done, to add input curves to"
     )
     parser.add_argument(
         "-p",
@@ -205,7 +219,7 @@ if __name__ == "__main__":
         action="store",
         dest="param",
         type=int,
-        help="force all input to be considered curves run using this param [0-4]"
+        help="force all input to be considered curves run using this ecm param [0-4]"
     )
     parser.add_argument(
         "-r",
@@ -215,6 +229,13 @@ if __name__ == "__main__":
         default=3,
         type=int,
         help="t-level decimal precision to display"
+    )
+    parser.add_argument(
+        "-e",
+        "--efs",
+        action="store_true",
+        dest="efs",
+        help="also display expected factor size calculation",
     )
     args = parser.parse_args()
 
@@ -242,8 +263,8 @@ if __name__ == "__main__":
         parser.print_help()
         sys.exit(1)
 
-    if args.t_level:
-        curve_inputs.append(get_t_level_curves(args.t_level))
+    if args.work:
+        curve_inputs.append(get_t_level_curves(args.work, args.precision))
 
     input_string = "\n".join(curve_inputs).strip()
     try:
@@ -252,8 +273,10 @@ if __name__ == "__main__":
         parsed_lines = list(map(parse_line, lines))
         line_validations = list(map(validate_line, zip(lines, parsed_lines)))
         logging.debug(f"Validations: {line_validations}")
-        t_level = convert_lines_to_t_level(parsed_lines)
+        t_level, efs = convert_lines_to_t_level_and_efs(parsed_lines)
         print(f"t{t_level:.{args.precision}f}")
+        if args.efs:
+            print(f"efs:{efs:.{args.precision}f}")
     except ValueError as e:
         if loglevel < logging.INFO:
             logging.exception(e)
