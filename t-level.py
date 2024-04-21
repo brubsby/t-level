@@ -15,6 +15,10 @@ import pathlib
 # python -m PyInstaller -F --add-data=ecmprobs.db:. t-level.py
 # and find the binary in dist
 
+
+__license__ = "MIT"
+__version__ = "0.9.5"
+
 conn = sqlite3.connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ecmprobs.db'))
 c = conn.cursor()
 
@@ -65,7 +69,7 @@ def get_failure_probabilities(b1, curves, param):
 def get_t_level_and_efs(curve_b1_tuples):
 
     if len(curve_b1_tuples) == 0:
-        return 0.0
+        return 0.0, 0.0
 
     fp = []
     total_fp = []
@@ -106,8 +110,6 @@ def get_t_level_and_efs(curve_b1_tuples):
 
 
 if __name__ == "__main__":
-    __license__ = "MIT"
-    __version__ = "0.9.4"
 
     def sci_int(x):
         if x is None or type(x) in [int]:
@@ -158,11 +160,100 @@ if __name__ == "__main__":
         curves = int(curves) if curves else 1
         for n in range(1, 10):
             this_t, _ = convert_lines_to_t_level_and_efs(((curves, b1, None, 1),))
-            logging.debug(f"order {n} t-level estimation: {curves: >4}@{b1} = t{this_t}")
+            logging.debug(f"order {n} t-level estimation: {curves: >4}@{b1} = t{this_t:.{args.precision}f}")
             diff = t_level - this_t
             if n >= 9 or abs(diff) < pow(10, -precision):
                 return f"{curves}@{b1}"
             curves = max(1, int(curves * pow(2, diff / 2)))
+
+
+    def b1_level_round(b1):
+        digits = int(math.floor(math.log10(b1)))
+        return int(round(b1, -digits+1))
+
+    def b1_level_string(b1):
+        digits = int(math.floor(math.log10(b1)))
+        return f"{b1//pow(10, digits - 1)}e{digits-1}"
+
+    def get_suggestion_curves(input_lines, start_t, end_t, curves_constraint, B1_constraint, param, precision):
+        # first, find some initial curves@B1 estimates for the given start_t, end_t, and constraints
+        B2 = None
+        if param is None:
+            param = 1
+        if curves_constraint is not None:
+            # curves held constant, find B1 from the lookup table to get us all the way to end_t
+            curves = sci_int(curves_constraint)
+            c.execute("SELECT b1, MIN(ABS(curves - ?)) FROM ecm_probs WHERE param = 1 AND digits = ?",
+                      (curves, max(10, min(round(end_t), 100))))
+            B1, _ = c.fetchone()
+        else:
+            if B1_constraint is not None:
+                # B1 held constant (strange but ok)
+                B1 = b1_level_round(sci_int(B1_constraint))
+            else:
+                # no constraints, choose B1 first from the regression formula
+                # from https://members.loria.fr/PZimmermann/records/ecm/params.html
+                B1 = b1_level_round(math.exp(0.0750 * math.log2(pow(10, end_t)) + 5.332))
+            diff_t = end_t - start_t
+            # diff = 2 is the point at which the work required will be roughly double
+            if diff_t >= 2:
+                # if we're doing more than twice the amount of work already done, the lookup table will
+                # be closer to the end curve amount, as it holds the curves to get from t0 to end_t
+
+                # make sure we get a B1 that is in our lookup tables
+                c.execute(f"SELECT MAX(B1) FROM ecm_probs WHERE B1 <= ? AND param = ?", (B1, param))
+                B1 = c.fetchone()[0]
+                lookup_t = max(10, min(math.floor(end_t), 100))
+                c.execute("SELECT curves FROM ecm_probs WHERE param = ? AND digits = ? AND B1 = ?",
+                          (param, lookup_t, B1))
+                curves = round(c.fetchone()[0])
+
+                # if start_t is in the lookup table, subtract those curves from our intial estimate curves
+                if 10 <= start_t <= 100:
+                    c.execute("SELECT curves FROM ecm_probs WHERE param = ? AND digits = ? AND B1 = ?",
+                              (param, round(start_t), B1))
+                    curves = max(1, round(curves - c.fetchone()[0]))
+            else:
+                # for diff_t < 2, the incremental table at https://members.loria.fr/PZimmermann/records/ecm/params.html
+                # will provide roughly the amount of curves to do log10(2^5) = ~1.505 t-levels of work.
+                curves = max(1, round(diff_t * pow(B1 / 150, 2 / 3)))
+
+        # next, improve upon the initial guess iteratively
+        last_diff = last_t_level = last_curves = last_B1 = None
+        for n in range(0, 20):
+            trial_lines = [*input_lines, (curves, B1, B2, param)]
+            t_level, _ = convert_lines_to_t_level_and_efs(trial_lines)
+            diff = end_t - t_level
+            if abs(diff) < pow(10, -precision-1):
+                break
+            if last_diff and abs(last_diff) < abs(diff):
+                curves = last_curves
+                B1 = last_B1
+            else:
+                logging.debug(
+                    f"order {n: >2} t-level estimation: {curves: >4}@{b1_level_string(B1)} = t{t_level:.{args.precision}f}, diff={diff}")
+            if curves_constraint:
+                # adjust B1 level
+                mult = 1 + pow(2, -n+5)
+                B1 *= pow(mult, (1 if diff > 0 else -1))
+                B1 = min(max(1000, b1_level_round(B1)), int(50e9))
+                if B1 == last_B1:
+                    break
+            else:
+                # adjust curves first, maybe then B1 if no constraint
+                mult = pow(2, -n)
+                curves *= 1 + mult * (1 if diff > 0 else -1)
+                curves = round(curves)
+                if curves == last_curves:
+                    break
+            last_diff = diff
+            last_curves = curves
+            last_B1 = B1
+        # todo finish estimating and iterating on t_level
+
+        B2 = "" if B2 == None else f",{B2}"
+        p = "" if param == 1 else f",p={param}"
+        return f"{curves}@{b1_level_string(B1)}{B2}{p}", t_level
 
 
     parser = argparse.ArgumentParser(
@@ -213,14 +304,14 @@ if __name__ == "__main__":
         type=float,
         help="existing t-level of work done, to add input curves to"
     )
-    parser.add_argument(
-        "-p",
-        "--param",
-        action="store",
-        dest="param",
-        type=int,
-        help="force all input to be considered curves run using this ecm param [0-4]"
-    )
+    # parser.add_argument(
+    #     "-f",
+    #     "--force-param",
+    #     action="store",
+    #     dest="force_param",
+    #     type=int,
+    #     help="force all input to be considered curves run using this ecm param [0-4]"
+    # )
     parser.add_argument(
         "-r",
         "--precision",
@@ -236,6 +327,45 @@ if __name__ == "__main__":
         action="store_true",
         dest="efs",
         help="also display expected factor size calculation",
+    )
+    parser.add_argument(
+        "-t",
+        action="store",
+        dest="t_level",
+        type=float,
+        help="the desired t-level to reach, suggests curve string to run to achieve the given t-level"
+    )
+    parser.add_argument(
+        "-n",
+        "--work-interval",
+        action="store",
+        dest="work_interval",
+        type=float,
+        help="when suggesting curve strings to run to achieve the provided -t level, split them up into sections of "
+             "t-level work this big"
+    )
+    parser.add_argument(
+        "-c",
+        "--curves",
+        action="store",
+        dest="curves",
+        type=int,
+        help="constrain suggestion curve quantity to a value, use with -t"
+    )
+    parser.add_argument(
+        "-p",
+        "--param",
+        action="store",
+        dest="param",
+        type=int,
+        help="constrain suggested param value to a value [0-4], default 1, use with -t"
+    )
+    parser.add_argument(
+        "-b",
+        action="store",
+        dest="B1",
+        type=str,
+        help="constrain suggested B1 to a value, use with -t"
     )
     args = parser.parse_args()
 
@@ -259,27 +389,39 @@ if __name__ == "__main__":
         except FileNotFoundError as e:
             logging.error(e)
             sys.exit(1)
-    if not curve_inputs and sys.stdin.isatty():
+    if not curve_inputs and not args.t_level and sys.stdin.isatty():
         parser.print_help()
         sys.exit(1)
+
+    if args.t_level is None:
+        if args.work_interval is not None or args.B1 is not None or args.param is not None or args.curves is not None:
+            print("-n, -c, -b, and -p flags can only be used with -t flag, exiting...")
+            sys.exit(1)
+        if args.B1 is not None and args.curve is not None:
+            print("-c and -b flags cannot both be used to constrain both curves and B1 simultaneously, exiting...")
+            sys.exit(1)
 
     if args.work:
         curve_inputs.append(get_t_level_curves(args.work, args.precision))
 
     input_string = "\n".join(curve_inputs).strip()
+    lines = re.split(r'(?:;|\r?\n)', input_string) if input_string else []
+    logging.debug(lines)
     try:
-        lines = re.split(r'(?:;|\r?\n)', input_string)
-        logging.debug(lines)
         parsed_lines = list(map(parse_line, lines))
         line_validations = list(map(validate_line, zip(lines, parsed_lines)))
-        logging.debug(f"Validations: {line_validations}")
+        logging.debug(f"Validation results: {line_validations}")
         t_level, efs = convert_lines_to_t_level_and_efs(parsed_lines)
-        print(f"t{t_level:.{args.precision}f}")
-        if args.efs:
-            print(f"efs:{efs:.{args.precision}f}")
     except ValueError as e:
         if loglevel < logging.INFO:
             logging.exception(e)
         else:
             logging.error(e)
         sys.exit(1)
+    print(f"t{t_level:.{args.precision}f}")
+    if args.efs:
+        print(f"efs:{efs:.{args.precision}f}")
+    if args.t_level:
+        curves, new_t_level = get_suggestion_curves(parsed_lines, t_level, args.t_level, args.curves, args.B1, args.param, args.precision)
+        print(f"Running the following will get you to t{new_t_level:.{args.precision}f}:")
+        print(f"{curves}")
