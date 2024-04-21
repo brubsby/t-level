@@ -219,38 +219,44 @@ if __name__ == "__main__":
                 curves = max(1, round(diff_t * pow(B1 / 150, 2 / 3)))
 
         # next, improve upon the initial guess iteratively
-        last_diff = last_t_level = last_curves = last_B1 = None
+        last_diff = last_t_level = last_curves = last_B1 = diff = t_level = None
+        start_curves = curves
         for n in range(0, 20):
             trial_lines = [*input_lines, (curves, B1, B2, param)]
+            if t_level != None:
+                last_t_level = t_level
+            if diff != None:
+                last_diff = diff
             t_level, _ = convert_lines_to_t_level_and_efs(trial_lines)
             diff = end_t - t_level
-            if abs(diff) < pow(10, -precision-1):
-                break
             if last_diff and abs(last_diff) < abs(diff):
                 curves = last_curves
                 B1 = last_B1
+                diff = last_diff
+                t_level = last_t_level
             else:
                 logging.debug(
                     f"order {n: >2} t-level estimation: {curves: >4}@{b1_level_string(B1)} = t{t_level:.{args.precision}f}, diff={diff}")
+            if abs(diff) < pow(10, -precision - 1):
+                logging.debug("precision achieved, breaking")
+                break
+            last_curves = curves
+            last_B1 = B1
             if curves_constraint:
                 # adjust B1 level
                 mult = 1 + pow(2, -n+5)
                 B1 *= pow(mult, (1 if diff > 0 else -1))
                 B1 = min(max(1000, b1_level_round(B1)), int(50e9))
-                if B1 == last_B1:
+                if B1 == last_B1 and mult != 1:
                     break
             else:
                 # adjust curves first, maybe then B1 if no constraint
-                mult = pow(2, -n)
-                curves *= 1 + mult * (1 if diff > 0 else -1)
+                addend = start_curves * pow(2, -n-1)
+                curves += addend * (1 if diff > 0 else -1)
                 curves = round(curves)
-                if curves == last_curves:
+                if curves == last_curves and addend != 0:
+                    logging.debug(f"terminal curves achieved on iteration {n}: {curves}")
                     break
-            last_diff = diff
-            last_curves = curves
-            last_B1 = B1
-        # todo finish estimating and iterating on t_level
-
         B2 = "" if B2 == None else f",{B2}"
         p = "" if param == 1 else f",p={param}"
         return f"{curves}@{b1_level_string(B1)}{B2}{p}", t_level
