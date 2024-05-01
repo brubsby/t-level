@@ -24,6 +24,8 @@
 import math
 import os
 import sys
+from functools import cache
+
 import gmpy2
 import logging
 
@@ -152,10 +154,13 @@ def rhoinit(parm_invh, parm_tablemax):
 
 
 param = 1
+n_default = pow(2, 200)
 
 
 # public api
-def ecmprob(digits, B1, B2=None, param=1, n=pow(2, 200)):
+# @cache
+@cache
+def ecmprob(digits, B1, B2=None, param=1, n=n_default):
     if B2 is None:
         # Default B2
         B2 = pow(B1 * ECM_COST, DEFAULT_B2_EXPONENT)
@@ -197,7 +202,7 @@ def ecmprob(digits, B1, B2=None, param=1, n=pow(2, 200)):
     treefile = None
     modulus = None
     dF, k, B2_ = bestD(B2min, B2, po2, use_ntt, maxmem, treefile, modulus)
-    print(f"dF = {dF}, k = {k}, B2 = {B2}, B2_ = {B2_}")
+    # logging.debug(f"dF = {dF}, k = {k}, B2 = {B2}, B2_ = {B2_}")
     nr = dF * dF * k
 
     if rhotable is None:
@@ -213,8 +218,9 @@ def ecmprob(digits, B1, B2=None, param=1, n=pow(2, 200)):
 # double N
 # double nr
 # int S
+@cache
 def _ecmprob (B1, B2, N, nr, S):
-    return prob (B1, B2, N, nr, S, ECM_EXTRA_SMOOTHNESS)
+    return prob(B1, B2, N, nr, S, ECM_EXTRA_SMOOTHNESS)
 
 
 # Assume N is as likely smooth as a number around N/exp(delta)
@@ -225,6 +231,7 @@ def _ecmprob (B1, B2, N, nr, S):
 # double nr
 # int S
 # double delta
+@cache
 def prob(B1, B2, N, nr, S, delta):
     sumthresh = 20000
     effN = N / math.exp(delta)
@@ -242,7 +249,7 @@ def prob(B1, B2, N, nr, S, delta):
     if (effN <= B1):
         return 1.
 
-    logging.debug(f"B1 = {B1:f}, B2 = {B2:f}, N = {N:.0f}, nr = {nr:f}, S = {S}")
+    # logging.debug(f"B1 = {B1:f}, B2 = {B2:f}, N = {N:.0f}, nr = {nr:f}, S = {S}")
 
     alpha = math.log(effN) / math.log(B1)
     stage1 = dickmanlocal(alpha, effN)
@@ -263,7 +270,7 @@ def prob(B1, B2, N, nr, S, delta):
         brsu = brsupower(B1, B2, effN, nr, S * 2)
 
 
-    logging.getLogger().debug(f"stage 1 : {stage1:f}, stage 2 : {stage2:f}, Brent-Suyama : {brsu:f}")
+    # logging.getLogger().debug(f"stage 1 : {stage1:f}, stage 2 : {stage2:f}, Brent-Suyama : {brsu:f}")
 
     return (stage1 + stage2 + brsu) if (stage1 + stage2 + brsu) > 0. else 0.
 
@@ -277,7 +284,8 @@ def prob(B1, B2, N, nr, S, delta):
 # ret double
 # double alpha
 # double x
-def dickmanlocal (alpha, x):
+@cache
+def dickmanlocal(alpha, x):
     if alpha <= 1.:
         return rhoexact(alpha)
     if alpha < tablemax:
@@ -288,6 +296,7 @@ def dickmanlocal (alpha, x):
 # assumes alpha < tablemax
 # ret double
 # double alpha
+@cache
 def dickmanrho(alpha):
     assert(alpha < tablemax)
 
@@ -304,6 +313,7 @@ def dickmanrho(alpha):
 # const unsigned long B1
 # const unsigned long B2
 # const double x
+@cache
 def dickmanmu_sum(B1, B2, x):
     s = 0.
     inv_logB1 = 1. / math.log(B1)
@@ -325,6 +335,7 @@ def dickmanmu_sum(B1, B2, x):
 # double alpha
 # double beta
 # double x
+@cache
 def dickmanmu(alpha, beta, x):
     #double a, b, sum
     #int ai, bi, i
@@ -339,10 +350,10 @@ def dickmanmu(alpha, beta, x):
     sum_ = 0.
     i = ai + 1
     while i < bi:
-      sum_ += dickmanlocal_i (i, x) / (alpha - i * h)
+      sum_ += dickmanlocal_i(i, x) / (alpha - i * h)
       i += 1
-    sum_ += 0.5 * dickmanlocal_i (ai, x) / (alpha - a)
-    sum_ += 0.5 * dickmanlocal_i (bi, x) / (alpha - b)
+    sum_ += 0.5 * dickmanlocal_i(ai, x) / (alpha - a)
+    sum_ += 0.5 * dickmanlocal_i(bi, x) / (alpha - b)
     sum_ *= h
     sum_ += (a - alpha + beta) * 0.5 * (dickmanlocal_i(ai, x) / (alpha - a) + dickmanlocal (alpha - beta, x) / beta)
     sum_ += (alpha - 1. - b) * 0.5 * (dickmanlocal(alpha - 1., x) + dickmanlocal_i(bi, x) / (alpha - b))
@@ -353,13 +364,14 @@ def dickmanmu(alpha, beta, x):
 # ret double
 # int ai
 # double x
+@cache
 def dickmanlocal_i(ai, x):
     if ai <= 0:
         return 0.
     if ai <= invh:
         return 1.
     if ai <= 2 * invh and ai < tablemax * invh:
-        return rhotable[ai] - M_EULER / math.log(x)
+        return rhotable[ai] - M_EULER / gmpy2.log(x)
     if ai < tablemax * invh:
         logx = math.log(x)
         return rhotable[ai] - (M_EULER * rhotable[ai - invh] + M_EULER_1 * rhotable[ai - 2 * invh] / logx) / logx
@@ -369,6 +381,7 @@ def dickmanlocal_i(ai, x):
 
 # ret double
 # double x
+@cache
 def rhoexact(x):
     assert(x <= 3.)
     if x <= 0.:
@@ -421,6 +434,7 @@ def dilog (x):
 # const unsigned long B1
 # const unsigned long B2
 # const double x
+@cache
 def dickmanmu_sum(B1, B2, x):
     B1 = int(B1)
     B2 = int(B2)
@@ -438,6 +452,7 @@ def dickmanmu_sum(B1, B2, x):
 
 # ret int
 # unsigned long n
+@cache
 def isprime(n):
     if n % 2 == 0:
         return n == 2
@@ -461,6 +476,7 @@ def isprime(n):
 # double B2
 # double N
 # double nr
+@cache
 def brentsuyama(B1, B2, N, nr):
     #double a, alpha, beta, sum_;
     #int ai, i;
@@ -473,12 +489,12 @@ def brentsuyama(B1, B2, N, nr):
     sum_ = 0.
     i = 1
     while i < ai:
-        sum_ += dickmanlocal_i(i, N) / (alpha - i * h) * (1 - math.exp(-nr * pow (B1, (-alpha + i * h))))
+        sum_ += dickmanlocal_i(i, N) / (alpha - i * h) * (1 - math.exp(-nr * pow(B1, (-alpha + i * h))))
         i += 1
-    sum_ += 0.5 * (1 - math.exp(-nr / pow (B1, alpha)))
-    sum_ += 0.5 * dickmanlocal_i (ai, N) / (alpha - a) * (1 - math.exp(-nr * pow (B1, (-alpha + a))))
+    sum_ += 0.5 * (1 - math.exp(-nr / pow(B1, alpha)))
+    sum_ += 0.5 * dickmanlocal_i(ai, N) / (alpha - a) * (1 - math.exp(-nr * pow(B1, (-alpha + a))))
     sum_ *= h
-    sum_ += 0.5 * (alpha - beta - a) * (dickmanlocal_i (ai, N) / (alpha - a) + dickmanlocal (alpha - beta, N) / beta)
+    sum_ += 0.5 * (alpha - beta - a) * (dickmanlocal_i (ai, N) / (alpha - a) + dickmanlocal(alpha - beta, N) / beta)
     return sum_
 
 
@@ -488,12 +504,13 @@ def brentsuyama(B1, B2, N, nr):
 # double N
 # double nr
 # int S
+@cache
 def brsudickson(B1, B2, N, nr, S):
-    sum_ = 0;
-    f = eulerphi (S) // 2;
+    sum_ = 0
+    f = eulerphi(S) // 2
     i = 1
     while i <= S // 2:
-        if gcd (i, S) == 1:
+        if gcd(i, S) == 1:
             sum_ += brentsuyama(B1, B2, N, nr * (gcd(i - 1, S) + gcd(i + 1, S) - 4) // 2)
         i += 1
     return sum_ / float(f)
@@ -505,7 +522,8 @@ def brsudickson(B1, B2, N, nr, S):
 # double N
 # double nr
 # int S
-def brsupower (B1, B2, N, nr, S):
+@cache
+def brsupower(B1, B2, N, nr, S):
     # int i, f;
     # double sum;
     sum_ = 0
@@ -521,6 +539,7 @@ def brsupower (B1, B2, N, nr, S):
 
 # ret long
 # unsigned long n
+@cache
 def eulerphi(n):
     phi = 1
     p = 2
@@ -664,9 +683,7 @@ def bestD(B2min, B2, po2, use_ntt, maxmem, treefile, modulus, k=0):
 
     if B2 < B2min:
         # No stage 2. Set relevant parameters to 0. Leave B2, B2min the same
-        finalk = 0
-        finaldF = 0
-        return finalk, finaldF
+        return dF, k, B2
 
     # /* Look for largest dF we can use while satisfying the maxmem parameter */
     maxN = Npo2 if po2 else N

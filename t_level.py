@@ -6,17 +6,18 @@ import sys
 import os
 import sqlite3
 import pathlib
+import rho
 
 # to build the binary, download pyinstaller with:
 # pip install -U pyinstaller
 # and run
-# pyinstaller -F --add-data=ecmprobs.db:. t-level.py
+# pyinstaller -F --add-data=ecmprobs.db:. t_level.py
 # or
-# python -m PyInstaller -F --add-data=ecmprobs.db:. t-level.py
+# python -m PyInstaller -F --add-data=ecmprobs.db:. t_level.py
 # and find the binary in dist
 
 
-__license__ = "MIT"
+__license__ = "GPL"
 __version__ = "0.9.5"
 
 conn = sqlite3.connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ecmprobs.db'))
@@ -56,14 +57,27 @@ def get_expected_factor_size(dp_list):
     return diff
 
 
-def get_failure_probabilities(b1, curves, param):
+def get_ecm_success_probs(b1, b2, param):
+    # faster to get from cache than recalculate
+    if b2 is None and (b1_level_round(b1) == b1 and 10000 <= b1 <= 50000000000):
+        c.execute(f"SELECT curves FROM ecm_probs WHERE B1 = ? AND param = ? ORDER BY curves ASC", (b1, param))
+        return map(lambda x: 1./x[0], c.fetchall())
+    last_success_prob = None
+    success_probs = []
+    for digits in range(10, 101):
+        if last_success_prob is not None and last_success_prob < 1 / 10000000:
+            success_probs.append(0.0)
+        else:
+            last_success_prob = rho.ecmprob(digits, b1, b2, param)
+            success_probs.append(last_success_prob)
+    return success_probs
+
+
+def get_failure_probabilities(b1, b2, curves, param):
     f = []
     if (math.isinf(b1) or math.isinf(curves)):
         return f
-    c.execute(f"SELECT MAX(B1) FROM ecm_probs WHERE B1 <= ? AND param = ?", (b1, param))
-    b1 = c.fetchone()[0]
-    c.execute(f"SELECT curves FROM ecm_probs WHERE B1 = ? AND param = ? ORDER BY curves ASC", (b1, param))
-    return list(map(lambda m: pow(1.0 - (1.0/m), curves), map(lambda x: x[0], c.fetchall())))
+    return list(map(lambda m: pow(1.0 - m, curves), get_ecm_success_probs(b1, b2, param)))
 
 
 def get_t_level_and_efs(curve_b1_tuples):
@@ -76,8 +90,8 @@ def get_t_level_and_efs(curve_b1_tuples):
 
     # gather failure probabilities for the given work numbers
     # make sure that the supplied b1 values are in our probability tables...
-    for curves, b1, param in curve_b1_tuples:
-        fp.append(get_failure_probabilities(b1, curves, param))
+    for curves, b1, b2, param in curve_b1_tuples:
+        fp.append(get_failure_probabilities(b1, b2, curves, param))
 
     for i in range(91):
         total_fp.append(1.0)
@@ -106,161 +120,173 @@ def get_t_level_and_efs(curve_b1_tuples):
             t_level = (y - b) / m
             break
 
-    return t_level, efs
+    return max(0.0, float(t_level)), float(efs)
+
+def sci_int(x):
+    if x is None or type(x) in [int]:
+        return x
+    if type(x) != str:
+        raise TypeError(f"sci_int needs a string input, instead of {type(x)} {x}")
+    if x.isnumeric():
+        return int(x)
+    match = re.match(r"^(\d+)(?:e|[x*]10\^)(\d+)$", x)
+    if not match:
+        raise ValueError(f"malformed intger string {x}, could not parse into an integer")
+    return int(match.group(1)) * pow(10, int(match.group(2)))
+
+line_regex = r"(\d+)@(?:B1=)?(\d+e\d+|\d+)(?:,\s*(?:B2=)?(\d+e\d+|\d+))?(?:,\s*(?:(?:param|p)=)?([0-4]))?\s*"
+
+def parse_line(line, param=None):
+    match = re.fullmatch(line_regex, line)
+    if not match:
+        raise ValueError(f"Malformed ecm curve string: \"{line.strip()}\"\n"
+                         f"Must match {line_regex}")
+    curves = sci_int(match.group(1))
+    B1 = sci_int(match.group(2))
+    B2 = sci_int(match.group(3))
+    if param is None:
+        param = sci_int(match.group(4)) if match.group(4) else 1
+    logging.info(f"Curve string: {line.strip(): <20} parsed as param={param} curves={curves: <5} B1={B1: <15} B2={B2}")
+    return curves, B1, B2, param
+
+
+def validate_line(line_tup):
+    line, parsed_line = line_tup
+    curves, B1, B2, param = parsed_line
+    assert(curves > 0)
+    assert(B1 > 0)
+    assert(B2 is None or B2 >= 0)
+    assert(param in [0, 1, 2, 3, 4])
+    return True
+
+
+def convert_lines_to_t_level_and_efs(parsed_lines):
+    c_at_b1_strings = list(map(lambda line: (line[0], line[1], line[2], line[3]), parsed_lines))
+    return get_t_level_and_efs(c_at_b1_strings)
+
+
+def get_t_level_curves(t_level, precision):
+    c.execute("SELECT b1, curves, MIN(ABS(curves - 10000)) FROM ecm_probs WHERE param = 1 AND digits = ?",
+              (max(10, min(round(t_level), 100)),))
+    b1, curves, _ = c.fetchone()
+    curves = int(curves) if curves else 1
+    for n in range(1, 20):
+        this_t, _ = convert_lines_to_t_level_and_efs(((curves, b1, None, 1),))
+        logging.debug(f"order {n} t-level estimation: {curves: >4}@{b1} = t{this_t:.{args.precision}f}")
+        diff = t_level - this_t
+        if n >= 19 or abs(diff) < pow(10, -precision)/2:
+            logging.debug("precision achieved, breaking")
+            return f"{curves}@{b1}"
+        last_curves = curves
+        curves = max(1, int(curves * pow(2, diff / 2)))
+        if curves == last_curves:
+            logging.debug("stopped moving, breaking")
+            return f"{curves}@{b1}"
+
+
+def b1_level_round(b1):
+    digits = int(math.floor(math.log10(b1)))
+    return int(round(b1, -digits+1))
+
+
+def b1_level_string(b1):
+    digits = int(math.floor(math.log10(b1)))
+    return f"{b1//pow(10, digits - 1)}e{digits-1}"
+
+
+def get_suggestion_curves(input_lines, start_t, end_t, curves_constraint, B1_constraint, param, precision):
+    # first, find some initial curves@B1 estimates for the given start_t, end_t, and constraints
+    B2 = None
+    if param is None:
+        param = 1
+    if curves_constraint is not None:
+        # curves held constant, find B1 from the lookup table to get us all the way to end_t
+        curves = sci_int(curves_constraint)
+        c.execute("SELECT b1, MIN(ABS(curves - ?)) FROM ecm_probs WHERE param = 1 AND digits = ?",
+                  (curves, max(10, min(round(end_t), 100))))
+        B1, _ = c.fetchone()
+    else:
+        if B1_constraint is not None:
+            # B1 held constant (strange but ok)
+            B1 = b1_level_round(sci_int(B1_constraint))
+        else:
+            # no constraints, choose B1 first from the regression formula
+            B1 = get_regression_b1_for_t(end_t)
+        diff_t = end_t - start_t
+        # diff = 2 is the point at which the work required will be roughly double
+        if diff_t >= 2:
+            # if we're doing more than twice the amount of work already done, the lookup table will
+            # be closer to the end curve amount, as it holds the curves to get from t0 to end_t
+
+            # make sure we get a B1 that is in our lookup tables
+            c.execute(f"SELECT MAX(B1) FROM ecm_probs WHERE B1 <= ? AND param = ?", (B1, param))
+            B1 = c.fetchone()[0]
+            lookup_t = max(10, min(math.floor(end_t), 100))
+            c.execute("SELECT curves FROM ecm_probs WHERE param = ? AND digits = ? AND B1 = ?",
+                      (param, lookup_t, B1))
+            curves = round(c.fetchone()[0])
+
+            # if start_t is in the lookup table, subtract those curves from our intial estimate curves
+            if 10 <= start_t <= 100:
+                c.execute("SELECT curves FROM ecm_probs WHERE param = ? AND digits = ? AND B1 = ?",
+                          (param, round(start_t), B1))
+                curves = max(1, round(curves - c.fetchone()[0]))
+        else:
+            # for diff_t < 2, the incremental table at https://members.loria.fr/PZimmermann/records/ecm/params.html
+            # will provide roughly the amount of curves to do log10(2^5) = ~1.505 t-levels of work.
+            curves = max(1, round(diff_t * pow(B1 / 150, 2 / 3)))
+
+    # next, improve upon the initial guess iteratively
+    last_diff = last_t_level = last_curves = last_B1 = diff = t_level = None
+    start_curves = curves
+    for n in range(0, 20):
+        trial_lines = [*input_lines, (curves, B1, B2, param)]
+        if t_level != None:
+            last_t_level = t_level
+        if diff != None:
+            last_diff = diff
+        t_level, _ = convert_lines_to_t_level_and_efs(trial_lines)
+        diff = end_t - t_level
+        if last_diff and abs(last_diff) < abs(diff):
+            curves = last_curves
+            B1 = last_B1
+            diff = last_diff
+            t_level = last_t_level
+        else:
+            logging.debug(
+                f"order {n: >2} t-level estimation: {curves: >4}@{b1_level_string(B1)} = t{t_level:.{args.precision}f}, diff={diff}")
+        if abs(diff) < pow(10, -precision - 1):
+            logging.debug("precision achieved, breaking")
+            break
+        last_curves = curves
+        last_B1 = B1
+        if curves_constraint:
+            # adjust B1 level
+            mult = 1 + pow(2, -n+5)
+            B1 *= pow(mult, (1 if diff > 0 else -1))
+            B1 = min(max(1000, b1_level_round(B1)), int(50e9))
+            if B1 == last_B1 and mult != 1:
+                break
+        else:
+            # adjust curves first, maybe then B1 if no constraint
+            addend = start_curves * pow(2, -n-1)
+            curves += addend * (1 if diff > 0 else -1)
+            curves = round(curves)
+            if curves == last_curves and addend != 0:
+                logging.debug(f"terminal curves achieved on iteration {n}: {curves}")
+                break
+    B2 = "" if B2 == None else f",{B2}"
+    p = "" if param == 1 else f",p={param}"
+    return f"{curves}@{b1_level_string(B1)}{B2}{p}", t_level
+
+
+def get_regression_b1_for_t(end_t):
+    # from https://members.loria.fr/PZimmermann/records/ecm/params.html
+    B1 = b1_level_round(math.exp(0.0750 * math.log2(pow(10, end_t)) + 5.332))
+    return B1
 
 
 if __name__ == "__main__":
-
-    def sci_int(x):
-        if x is None or type(x) in [int]:
-            return x
-        if type(x) != str:
-            raise TypeError(f"sci_int needs a string input, instead of {type(x)} {x}")
-        if x.isnumeric():
-            return int(x)
-        match = re.match(r"^(\d+)(?:e|[x*]10\^)(\d+)$", x)
-        if not match:
-            raise ValueError(f"malformed intger string {x}, could not parse into an integer")
-        return int(match.group(1)) * pow(10, int(match.group(2)))
-
-    line_regex = r"(\d+)@(?:B1=)?(\d+e\d+|\d+)(?:,\s*(?:B2=)?(\d+e\d+|\d+))?(?:,\s*(?:(?:param|p)=)?([0-4]))?\s*"
-
-    def parse_line(line, param=None):
-        match = re.fullmatch(line_regex, line)
-        if not match:
-            raise ValueError(f"Malformed ecm curve string: \"{line.strip()}\"\n"
-                             f"Must match {line_regex}")
-        curves = sci_int(match.group(1))
-        B1 = sci_int(match.group(2))
-        B2 = sci_int(match.group(3))
-        if param is None:
-            param = sci_int(match.group(4)) if match.group(4) else 1
-        logging.info(f"Curve string: {line.strip(): <20} parsed as param={param} curves={curves: <5} B1={B1: <15} B2={B2}")
-        return curves, B1, B2, param
-
-
-    # TODO implement B2!=default
-    def validate_line(line_tup):
-        line, parsed_line = line_tup
-        curves, B1, B2, param = parsed_line
-        if B2:
-            raise ValueError(f"Problem with curve string: \"{line.strip()}\" only ecm default B2 supported")
-        return True
-
-
-    def convert_lines_to_t_level_and_efs(parsed_lines):
-        c_at_b1_strings = list(map(lambda line: (line[0], line[1], line[3]), parsed_lines))
-        return get_t_level_and_efs(c_at_b1_strings)
-
-
-    def get_t_level_curves(t_level, precision):
-        c.execute("SELECT b1, curves, MIN(ABS(curves - 10000)) FROM ecm_probs WHERE param = 1 AND digits = ?",
-                  (max(10, min(round(t_level), 100)),))
-        b1, curves, _ = c.fetchone()
-        curves = int(curves) if curves else 1
-        for n in range(1, 10):
-            this_t, _ = convert_lines_to_t_level_and_efs(((curves, b1, None, 1),))
-            logging.debug(f"order {n} t-level estimation: {curves: >4}@{b1} = t{this_t:.{args.precision}f}")
-            diff = t_level - this_t
-            if n >= 9 or abs(diff) < pow(10, -precision):
-                return f"{curves}@{b1}"
-            curves = max(1, int(curves * pow(2, diff / 2)))
-
-
-    def b1_level_round(b1):
-        digits = int(math.floor(math.log10(b1)))
-        return int(round(b1, -digits+1))
-
-    def b1_level_string(b1):
-        digits = int(math.floor(math.log10(b1)))
-        return f"{b1//pow(10, digits - 1)}e{digits-1}"
-
-    def get_suggestion_curves(input_lines, start_t, end_t, curves_constraint, B1_constraint, param, precision):
-        # first, find some initial curves@B1 estimates for the given start_t, end_t, and constraints
-        B2 = None
-        if param is None:
-            param = 1
-        if curves_constraint is not None:
-            # curves held constant, find B1 from the lookup table to get us all the way to end_t
-            curves = sci_int(curves_constraint)
-            c.execute("SELECT b1, MIN(ABS(curves - ?)) FROM ecm_probs WHERE param = 1 AND digits = ?",
-                      (curves, max(10, min(round(end_t), 100))))
-            B1, _ = c.fetchone()
-        else:
-            if B1_constraint is not None:
-                # B1 held constant (strange but ok)
-                B1 = b1_level_round(sci_int(B1_constraint))
-            else:
-                # no constraints, choose B1 first from the regression formula
-                # from https://members.loria.fr/PZimmermann/records/ecm/params.html
-                B1 = b1_level_round(math.exp(0.0750 * math.log2(pow(10, end_t)) + 5.332))
-            diff_t = end_t - start_t
-            # diff = 2 is the point at which the work required will be roughly double
-            if diff_t >= 2:
-                # if we're doing more than twice the amount of work already done, the lookup table will
-                # be closer to the end curve amount, as it holds the curves to get from t0 to end_t
-
-                # make sure we get a B1 that is in our lookup tables
-                c.execute(f"SELECT MAX(B1) FROM ecm_probs WHERE B1 <= ? AND param = ?", (B1, param))
-                B1 = c.fetchone()[0]
-                lookup_t = max(10, min(math.floor(end_t), 100))
-                c.execute("SELECT curves FROM ecm_probs WHERE param = ? AND digits = ? AND B1 = ?",
-                          (param, lookup_t, B1))
-                curves = round(c.fetchone()[0])
-
-                # if start_t is in the lookup table, subtract those curves from our intial estimate curves
-                if 10 <= start_t <= 100:
-                    c.execute("SELECT curves FROM ecm_probs WHERE param = ? AND digits = ? AND B1 = ?",
-                              (param, round(start_t), B1))
-                    curves = max(1, round(curves - c.fetchone()[0]))
-            else:
-                # for diff_t < 2, the incremental table at https://members.loria.fr/PZimmermann/records/ecm/params.html
-                # will provide roughly the amount of curves to do log10(2^5) = ~1.505 t-levels of work.
-                curves = max(1, round(diff_t * pow(B1 / 150, 2 / 3)))
-
-        # next, improve upon the initial guess iteratively
-        last_diff = last_t_level = last_curves = last_B1 = diff = t_level = None
-        start_curves = curves
-        for n in range(0, 20):
-            trial_lines = [*input_lines, (curves, B1, B2, param)]
-            if t_level != None:
-                last_t_level = t_level
-            if diff != None:
-                last_diff = diff
-            t_level, _ = convert_lines_to_t_level_and_efs(trial_lines)
-            diff = end_t - t_level
-            if last_diff and abs(last_diff) < abs(diff):
-                curves = last_curves
-                B1 = last_B1
-                diff = last_diff
-                t_level = last_t_level
-            else:
-                logging.debug(
-                    f"order {n: >2} t-level estimation: {curves: >4}@{b1_level_string(B1)} = t{t_level:.{args.precision}f}, diff={diff}")
-            if abs(diff) < pow(10, -precision - 1):
-                logging.debug("precision achieved, breaking")
-                break
-            last_curves = curves
-            last_B1 = B1
-            if curves_constraint:
-                # adjust B1 level
-                mult = 1 + pow(2, -n+5)
-                B1 *= pow(mult, (1 if diff > 0 else -1))
-                B1 = min(max(1000, b1_level_round(B1)), int(50e9))
-                if B1 == last_B1 and mult != 1:
-                    break
-            else:
-                # adjust curves first, maybe then B1 if no constraint
-                addend = start_curves * pow(2, -n-1)
-                curves += addend * (1 if diff > 0 else -1)
-                curves = round(curves)
-                if curves == last_curves and addend != 0:
-                    logging.debug(f"terminal curves achieved on iteration {n}: {curves}")
-                    break
-        B2 = "" if B2 == None else f",{B2}"
-        p = "" if param == 1 else f",p={param}"
-        return f"{curves}@{b1_level_string(B1)}{B2}{p}", t_level
-
 
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -408,6 +434,9 @@ if __name__ == "__main__":
             sys.exit(1)
 
     if args.work:
+        if args.work < 5 or args.work > 100:
+            print("-w flag must be >= 5 and <= 100")
+            sys.exit(1)
         curve_inputs.append(get_t_level_curves(args.work, args.precision))
 
     input_string = "\n".join(curve_inputs).strip()
