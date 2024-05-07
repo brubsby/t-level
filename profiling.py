@@ -1,7 +1,9 @@
 import cProfile
-import t_level
+import importlib
 import re
 import gmpy2
+
+t_level = importlib.import_module("t-level")
 
 cProfile.run(
 """
