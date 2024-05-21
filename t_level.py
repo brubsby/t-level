@@ -8,11 +8,12 @@ import os
 import sqlite3
 import pathlib
 import rho
+from functools import cache
 
 # to build the binary, download pyinstaller with:
 # pip install -U pyinstaller
 # and run
-# python -m PyInstaller -F --clean --add-data=ecmprobs.db:. t-level.py
+# python -m PyInstaller -F --clean --name t-level --add-data=ecmprobs.db:. t_level.py
 # and find the binary in dist
 
 
@@ -133,9 +134,12 @@ def sci_int(x):
         raise ValueError(f"malformed intger string {x}, could not parse into an integer")
     return int(match.group(1)) * pow(10, int(match.group(2)))
 
-line_regex = r"(\d+e\d+|\d+)(?:\/(\d+e\d+|\d+))?@(?:B1=)?(\d+e\d+|\d+)(?:,\s*(?:B2=)?(\d+e\d+|\d+))?(?:,\s*(?:(?:param|p)=)?([0-4]))?\s*"
+line_regex = r"\s*(\d+e\d+|\d+)(?:\/(\d+e\d+|\d+))?@(?:B1=)?(\d+e\d+|\d+)(?:,\s*(?:B2=)?(\d+e\d+|\d+))?(?:,\s*(?:(?:param|p)=)?([0-4]))?\s*"
+
 
 def parse_line(line, param=None):
+    if not line:
+        return []
     match = re.fullmatch(line_regex, line)
     if not match:
         raise ValueError(f"Malformed ecm curve string: \"{line.strip()}\"\n"
@@ -172,6 +176,21 @@ def convert_lines_to_t_level_and_efs(parsed_lines):
     return get_t_level_and_efs(c_at_b1_strings)
 
 
+def convert_string_to_parsed_lines(input_string, validation=True):
+    lines = re.split(r'(?:;|\r?\n)', input_string) if input_string else []
+    logging.debug(lines)
+    parsed_lines = list(itertools.chain.from_iterable(map(parse_line, lines)))
+    if validation:
+        line_validations = list(map(validate_line, zip(lines, parsed_lines)))
+        logging.debug(f"Validation results: {line_validations}")
+    return parsed_lines
+
+
+def convert_string_to_t_level_and_efs(input_string):
+    parsed_lines = convert_string_to_parsed_lines(input_string)
+    return convert_lines_to_t_level_and_efs(parsed_lines)
+
+
 def get_t_level_curves(t_level, precision):
     c.execute("SELECT b1, curves, MIN(ABS(curves - 10000)) FROM ecm_probs WHERE param = 1 AND digits = ?",
               (max(10, min(round(t_level), 100)),))
@@ -179,7 +198,7 @@ def get_t_level_curves(t_level, precision):
     curves = int(curves) if curves else 1
     for n in range(1, 20):
         this_t, _ = convert_lines_to_t_level_and_efs(((curves, b1, None, 1),))
-        logging.debug(f"order {n} t-level estimation: {curves: >4}@{b1} = t{this_t:.{args.precision}f}")
+        logging.debug(f"order {n} t-level estimation: {curves: >4}@{b1} = t{this_t:.{precision}f}")
         diff = t_level - this_t
         if n >= 19 or abs(diff) < pow(10, -precision)/2:
             logging.debug("precision achieved, breaking")
@@ -448,12 +467,8 @@ if __name__ == "__main__":
         curve_inputs.append(get_t_level_curves(args.work, args.precision))
 
     input_string = "\n".join(curve_inputs).strip()
-    lines = re.split(r'(?:;|\r?\n)', input_string) if input_string else []
-    logging.debug(lines)
     try:
-        parsed_lines = list(itertools.chain.from_iterable(map(parse_line, lines)))
-        line_validations = list(map(validate_line, zip(lines, parsed_lines)))
-        logging.debug(f"Validation results: {line_validations}")
+        parsed_lines = convert_string_to_parsed_lines(input_string)
         t_level, efs = convert_lines_to_t_level_and_efs(parsed_lines)
     except ValueError as e:
         if loglevel < logging.INFO:

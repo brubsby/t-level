@@ -158,7 +158,6 @@ n_default = pow(2, 200)
 
 
 # public api
-# @cache
 @cache
 def ecmprob(digits, B1, B2=None, param=1, n=n_default):
     if B2 is None:
