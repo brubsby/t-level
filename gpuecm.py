@@ -493,6 +493,7 @@ async def main():
                             cancel_tasks(tasks)
                             await kill_processes(cpu_procs)
                             cofactor, found_factors, fully_factored = new_factors_found(input_number, cofactor, found_factors)
+                            await asyncio.sleep(0.1)
                             # break out of CPU loop to go see if GPU is done
                             break
 
@@ -505,7 +506,7 @@ async def main():
                                     f" {count: >{total_curves_digits}}/{total_curves}@{old_b1},{old_b2},{param}  {message if count < total_curves else '': <{len(message)+10}}")
                                 cancel_tasks(tasks)
                                 await kill_processes(cpu_procs)
-                                await asyncio.sleep(0.2)
+                                await asyncio.sleep(0.1)
                                 loop.stop()
                                 return
                             if line:
@@ -529,7 +530,6 @@ async def main():
                                         eprint(f"unknown line from CPU ECM with b1:{old_b1} b2:{old_b2}:\"{line}\"")
                                         # eprint(f"sys exit")
                                         # await shutdown(1)  # not sure how to parse yet
-        await kill_gpu_procs(False)
         eprint()
         loop.stop()
 
