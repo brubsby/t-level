@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import shutil
+import signal
 import asyncio
 import pathlib
 import logging
@@ -14,9 +15,25 @@ import subprocess
 import gmpy2
 from aiofiles import os as aios
 
+interrupt_level = 0
+
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
+
+
+def positive_integer(arg):
+    val = int(arg)
+    if val < 1:
+        raise ValueError(f"{arg} not a positive integer")
+    return val
+
+
+def nonnegative_integer(arg):
+    val = int(arg)
+    if val < 0:
+        raise ValueError(f"{arg} not a non-negative integer")
+    return val
 
 
 def locate_gpu_ecm_install():
@@ -32,29 +49,62 @@ def locate_gpu_ecm_install():
 def determine_optimal_num_gpu_curves():
     return 8192
 
+# def get_b1_b2_plan():
+#     # replace this with dynamic b1 level choice
+#     return [
+#         (100, 600000),
+#         (136808, 8000000),
+#         (500000, 15000000),
+#         (901309, 21288716),
+#         (1669233, 52732403),
+#         (2994200, 131737403),
+#         (5026497, 352580564),
+#         (6872112, 531505103),
+#         (14019466, 1443854888),
+#         (17829816, 2185199673),
+#         (27253419, 4313913596),
+#         (33115351, 5777998123),
+#         (33117865, 5778623383),
+#         (77871012, 23621754325),
+#         (77606595, 23492099779),
+#         (77744024, 23559486878),
+#         (149939404, 70874529876),
+#         (150583940, 71319614527),
+#         (187054292, 96504234003),
+#         (186925087, 96415011427),
+#         (186928084, 96417081007),
+#         (251865710, 144528548178),
+#         (251850112, 144516923636),
+#         (319326164, 194825966526),
+#         (316463050, 192688956109),
+#         (524397977, 388625202894),
+#     ]
+
 def get_b1_b2_plan():
     # replace this with dynamic b1 level choice
     return [
-        (9562627, 531354383),
-        (19673032, 1445101698),
-        (19672032, 1444962986),
-        (24852366, 2163537440),
-        (46502049, 5757597518),
-        (46501349, 5757473846),
-        (46735326, 5798811809),
-        (91219077, 17211831452),
-        (109526746, 23522817677),
-        (110359262, 23807037137),
-        (110356563, 23806115703),
-        (211471250, 70463572846),
-        (265889508, 97002133243),
-        (265866810, 96991063939),
-        (265053791, 96594572860),
-        (265065390, 96600229432),
-        (265049392, 96592427567),
-        (356693127, 144620131535),
-        (356702826, 144625247257),
-        (356705225, 144626512606),
+        (100, 100000000),
+        (40434702, 23524201837),
+        (59868512, 46897505668),
+        (77569142, 70713526451),
+        (96980101, 96830777812),
+        (97044194, 96917014303),
+        (130465452, 144878169431),
+        (163525145, 192530863837),
+        (163516546, 192518469121),
+        (271217975, 388385545690),
+        (271227974, 388412217655),
+        (272381659, 391489629978),
+        (581431351, 1590060278137),
+        (690639929, 2384784962810),
+        (690623430, 2384664897493),
+        (582285965, 1596279412697),
+        (821583233, 3218422750288),
+        (1172685119, 6472256728113),
+        (1442021083, 9709869363672),
+        (1163349953, 6371594488808),
+        (1163357152, 6371671817551),
+        (1428911694, 9537400540544),
     ]
 
 
@@ -144,11 +194,116 @@ def new_factors_found(input_number, old_cofactor, found_factors):
     return cofactor, found_factors, cofactor == 1
 
 
-
-
-
 async def main():
+
+    __version__ = "0.0.2"
+
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=f"")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version="%(prog)s (version {version})".format(version=__version__))
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="verbosity (-v, -vv, etc)")
+    # parser.add_argument(
+    #     "-q",
+    #     type=str,
+    #     action="store",
+    #     dest="expression",
+    #     help="direct expression input (currently only decimal expansions supported)",
+    # )
+    # parser.add_argument(
+    #     "-i",
+    #     "--input",
+    #     type=str,
+    #     action="store",
+    #     dest="filename",
+    #     help="file containing composites to run ecm on",
+    # )
+    # parser.add_argument(
+    #     "-w",
+    #     "--work",
+    #     action="store",
+    #     dest="work",
+    #     type=float,
+    #     help="existing t-level of work done, determines starting point of work"
+    # )
+    # parser.add_argument(
+    #     "-p",
+    #     "--pretest",
+    #     action="store",
+    #     dest="pretest",
+    #     type=float,
+    #     help="the desired t-level to reach in deceimal digits, quits after reaching"
+    # )
+    # parser.add_argument(
+    #     "-t",
+    #     "--threads",
+    #     action="store",
+    #     dest="threads",
+    #     type=positive_integer,
+    #     default=os.cpu_count(),
+    #     help="number of threads to use in CPU stage-2"
+    # )
+    # parser.add_argument(
+    #     "--gpudevice",
+    #     action="store",
+    #     dest="gpu_device",
+    #     type=nonnegative_integer,
+    #     help="use device <GPU_DEVICE> to execute GPU code (by default, CUDA chooses)"
+    # )
+    # parser.add_argument(
+    #     "--gpucurves",
+    #     action="store",
+    #     dest="gpu_curves",
+    #     type=positive_integer,
+    #     help="compute on <GPU_CURVES> curves in parallel on the GPU (by default, CUDA chooses)"
+    # )
+    # parser.add_argument(
+    #     "-o",
+    #     "--one",
+    #     action="store",
+    #     dest="exit_after_one",
+    #     help="stop ECM curves on composite after one factor is found, equivalent to -x 1"
+    # )
+    # parser.add_argument(
+    #     "-x",
+    #     "--exitafter",
+    #     action="store_true",
+    #     dest="exit_after",
+    #     type=positive_integer,
+    #     help="stop ECM curves on a composite after <EXIT_AFTER> factors are found, or cofactor is prime"
+    # )
+    # parser.add_argument(
+    #     "--tune",
+    #     action="store_true",
+    #     dest="tune",
+    #     help="run tuning"
+    # )
+
+    args = parser.parse_args()
+
+    loglevel = logging.WARNING
+    if args.verbose > 0:
+        loglevel = logging.INFO
+    if args.verbose > 1:
+        loglevel = logging.DEBUG
+    logging.basicConfig(level=loglevel, format="%(message)s")
+
+    def handle_sigint():
+        global interrupt_level
+        interrupt_level += 1
+
+    signal.signal(signal.SIGINT, handle_sigint)
+
     input_numbers = []
+    factor_size_sigma_report_threshold = 60
     num_threads = 16
     curves_per_batch = determine_optimal_num_gpu_curves()
     param = 3
@@ -203,7 +358,11 @@ async def main():
                     gpu_factors = dict(map(lambda x: (int(x[0]), tuple(map(int, x[1:]))), reversed(factor_matches)))
                     if gpu_factors:
                         found_factors.extend(gpu_factors.keys())
+                        for factor, params in gpu_factors.items():
+                            if math.log10(factor) >= factor_size_sigma_report_threshold:
+                                eprint(f"********** BIG GPU ECM STAGE-1 HIT: TELL YOUR FRIENDS! SIGMA={params[1]}:{params[2]} **********")
                         cofactor, found_factors, fully_factored = new_factors_found(input_number, cofactor, found_factors)
+                        eprint(factor_matches)
                     if fully_factored or (found_factors and exit_after_one):
                         eprint()
                         print(f"{input_number}={found_factors}")
@@ -284,17 +443,25 @@ async def main():
                             break
 
                         all_cpu_processes_done = True
+                        using_lines = {}
                         for cpu_proc in cpu_procs:
                             line = await cpu_proc.stdout.readline()
                             if line:
                                 line = line.decode().strip()
                                 all_cpu_processes_done = False
-                                if not line.startswith("Step 1") and not line.startswith("Using") and not line.startswith("Input number is") and not line.startswith("Resuming ECM") and not line.startswith("GMP-ECM"):
+                                if not line.startswith("Step 1") and not line.startswith("Input number is") and not line.startswith("Resuming ECM") and not line.startswith("GMP-ECM"):
                                     if line.startswith("Step 2"):
                                         count += 1
                                         eprint(f" {count: >{total_curves_digits}}/{total_curves}@{old_b1},{old_b2},{param}  ", end="\r")
+                                    elif line.startswith("Using"):
+                                        using_lines[cpu_proc] = line
                                     elif line.startswith("********** Factor found in step 2:"):
-                                        found_factors.append(int(line.strip().split(" ")[-1]))
+                                        found_factor = int(line.strip().split(" ")[-1])
+                                        if math.log10(found_factor) >= factor_size_sigma_report_threshold:
+                                            eprint(f"********** BIG ECM STAGE-2 HIT: TELL YOUR FRIENDS! **********")
+                                            eprint(using_lines[cpu_proc])
+                                        found_factors.append(found_factor)
+
                                         break
                                     else:
                                         eprint(f"\n{line}\n")
