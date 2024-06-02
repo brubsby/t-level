@@ -172,8 +172,8 @@ def validate_line(line_tup):
 
 
 def convert_lines_to_t_level_and_efs(parsed_lines):
-    c_at_b1_strings = list(map(lambda line: (line[0], line[1], line[2], line[3]), parsed_lines))
-    return get_t_level_and_efs(c_at_b1_strings)
+    c_at_b1_tuples = list(map(lambda line: (line[0], line[1], line[2], line[3]), parsed_lines))
+    return get_t_level_and_efs(c_at_b1_tuples)
 
 
 def convert_string_to_parsed_lines(input_string, validation=True):
