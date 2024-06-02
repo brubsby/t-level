@@ -51,8 +51,18 @@ def locate_gpu_ecm_install():
     sys.exit(1)
 
 
-def determine_optimal_num_gpu_curves():
-    return 8192
+# run a small batch to see how many curves it picks
+def determine_optimal_num_gpu_curves(ecm_path, param, gpu_device):
+    composite = str(797161)
+    gpu_flags = ["-gpu"]
+    if gpu_device:
+        gpu_flags += ["-gpudevice", str(gpu_device)]
+    process = subprocess.run([ecm_path] + gpu_flags + ["-param", str(param), "2", "0"], input=composite, capture_output=True, text=True)
+    for line in process.stdout.split("\n"):
+        match = re.search(r"(\d+) curves", line)
+        if match:
+            return int(match.group(1))
+    assert False, "Couldn't determine optimal number of gpu curves"
 
 def get_b1_b2_plan():
     # replace this with dynamic b1 level choice
@@ -256,18 +266,21 @@ async def create_gpu_proc(*args, **kwargs):
     return gpu_proc
 
 
-
 # noinspection PyArgumentList
 class GPUProc(object):
 
-    def __init__(self, ecm_path, save_file_path, b1, composite):
+    def __init__(self, ecm_path, gpu_device, gpu_curves, save_file_path, b1, composite):
         self.ecm_path = ecm_path
+        self.gpu_device = gpu_device
+        self.gpu_curves = gpu_curves
         self.save_file_path = save_file_path
         self.b1 = b1
         self.composite = composite
 
     async def _init(self):
-        gpu_ecm_args = [self.ecm_path, "-gpu", "-v", "-save", self.save_file_path, str(self.b1), "0"]
+        gpu_device_args = ["-gpudevice", str(self.gpu_device)] if self.gpu_device else []
+        gpu_curves_args = ["-gpucurves", str(self.gpu_curves)] if self.gpu_curves else []
+        gpu_ecm_args = [self.ecm_path] + gpu_device_args + gpu_curves_args + ["-gpu", "-v", "-save", self.save_file_path, str(self.b1), "0"]
         self.gpu_proc = await asyncio.subprocess.create_subprocess_exec(
             *gpu_ecm_args, stdout=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT, process_group=0)
@@ -373,36 +386,36 @@ async def main():
     #     type=float,
     #     help="the desired t-level to reach in deceimal digits, quits after reaching"
     # )
-    # parser.add_argument(
-    #     "-t",
-    #     "--threads",
-    #     action="store",
-    #     dest="threads",
-    #     type=positive_integer,
-    #     default=os.cpu_count(),
-    #     help="number of threads to use in CPU stage-2"
-    # )
-    # parser.add_argument(
-    #     "--gpudevice",
-    #     action="store",
-    #     dest="gpu_device",
-    #     type=nonnegative_integer,
-    #     help="use device <GPU_DEVICE> to execute GPU code (by default, CUDA chooses)"
-    # )
-    # parser.add_argument(
-    #     "--gpucurves",
-    #     action="store",
-    #     dest="gpu_curves",
-    #     type=positive_integer,
-    #     help="compute on <GPU_CURVES> curves in parallel on the GPU (by default, CUDA chooses)"
-    # )
-    # parser.add_argument(
-    #     "-o",
-    #     "--one",
-    #     action="store",
-    #     dest="exit_after_one",
-    #     help="stop ECM curves on composite after one factor is found, equivalent to -x 1"
-    # )
+    parser.add_argument(
+        "-t",
+        "--threads",
+        action="store",
+        dest="threads",
+        type=positive_integer,
+        default=os.cpu_count(),
+        help="number of threads to use in CPU stage-2"
+    )
+    parser.add_argument(
+        "--gpudevice",
+        action="store",
+        dest="gpu_device",
+        type=nonnegative_integer,
+        help="use device <GPU_DEVICE> to execute GPU code (by default, CUDA chooses)"
+    )
+    parser.add_argument(
+        "--gpucurves",
+        action="store",
+        dest="gpu_curves",
+        type=positive_integer,
+        help="compute on <GPU_CURVES> curves in parallel on the GPU (by default, CUDA chooses)"
+    )
+    parser.add_argument(
+        "-o",
+        "--one",
+        action="store",
+        dest="exit_after_one",
+        help="stop ECM curves on composite after one factor is found"  # , equivalent to -x 1"
+    )
     # parser.add_argument(
     #     "-x",
     #     "--exitafter",
@@ -452,15 +465,16 @@ async def main():
                                 lambda signame=signame: asyncio.create_task(handle_signals(signame)))
 
     input_numbers = []
-    factor_size_sigma_report_threshold = 60
-    num_threads = 16
-    curves_per_batch = determine_optimal_num_gpu_curves()
     param = 3
-    exit_after_one = True
+    factor_size_sigma_report_threshold = 60
+    install_location = locate_gpu_ecm_install()
+    gpu_device = args.gpu_device
+    num_threads = args.threads
+    exit_after_one = args.exit_after_one
+    curves_per_batch = determine_optimal_num_gpu_curves(install_location, param, gpu_device) if not args.gpu_curves else args.gpu_curves
     with tempfile.TemporaryDirectory() as tmpdir:
         if not sys.stdin.isatty():
             input_numbers = list(map(int, sys.stdin.read().strip().split("\n")))
-        install_location = locate_gpu_ecm_install()
         gpu_proc = None
         old_gpu_proc = None
         for input_number in input_numbers:
@@ -555,7 +569,7 @@ async def main():
                 if interrupt_level == 0:  # only make gpu process if we're not interrupted
                     temp_save_file_name = f"{hash(input_number)}_{b1}_stg1_residues"
                     temp_save_file_path = os.path.join(tmpdir, temp_save_file_name)
-                    gpu_proc = await create_gpu_proc(install_location, temp_save_file_path, b1, cofactor)
+                    gpu_proc = await create_gpu_proc(install_location, gpu_device, curves_per_batch, temp_save_file_path, b1, cofactor)
 
                 if old_temp_save_file_path and await aios.path.isfile(old_temp_save_file_path):
                     # run cpu curves
