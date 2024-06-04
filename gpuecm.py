@@ -378,14 +378,14 @@ async def main():
     #     type=float,
     #     help="existing t-level of work done, determines starting point of work"
     # )
-    # parser.add_argument(
-    #     "-p",
-    #     "--pretest",
-    #     action="store",
-    #     dest="pretest",
-    #     type=float,
-    #     help="the desired t-level to reach in deceimal digits, quits after reaching"
-    # )
+    parser.add_argument(
+        "-p",
+        "--pretest",
+        action="store",
+        dest="pretest",
+        type=float,
+        help="the desired t-level to reach in decimal digits, stops work after reaching"
+    )
     parser.add_argument(
         "-t",
         "--threads",
@@ -455,6 +455,7 @@ async def main():
         elif interrupt_level == 3:
             inner_message = "killing all remaining processes and quitting..."
         messages[2] = f"Interrupt level: {interrupt_level}{', ' + inner_message if inner_message else ''}"
+        eprint("", end="\r")  # sigint writes a newline on most terminals
         # eprint(message, end="\r")
         if interrupt_level >= 4:
             eprint("\n# Shutting Down...", end="")
@@ -471,6 +472,7 @@ async def main():
     gpu_device = args.gpu_device
     num_threads = args.threads
     exit_after_one = args.exit_after_one
+    pretest = args.pretest
     curves_per_batch = determine_optimal_num_gpu_curves(install_location, param, gpu_device) if not args.gpu_curves else args.gpu_curves
     with tempfile.TemporaryDirectory() as tmpdir:
         if not sys.stdin.isatty():
@@ -479,6 +481,8 @@ async def main():
         old_gpu_proc = None
         for input_number in input_numbers:
             t_level_lines_dict = {}
+            tlev = 0
+            efs = 0
             await kill_gpu_procs(True)
             gpu_proc = None
             old_gpu_proc = None
@@ -492,12 +496,12 @@ async def main():
                 if fully_factored or (found_factors and exit_after_one):
                     print(f"{input_number}={found_factors}")
                     break
+                if pretest and tlev >= pretest:
+                    break
                 b1, b2 = plan[i]
                 old_b1, old_b2 = plan[i-1] if i > 0 else plan[i]
                 if gpu_proc:  # wait for old gpu_proc to finish before continuing with next
                     eprint()
-                    # print 0 curves as status to show GPU ecm is running
-                    # eprint(f" waiting for gpu_proc", end="\r")
                     sleep_time = 0.01
                     while gpu_proc.return_code() is None:
                         tlev, efs = t_level.get_t_level_and_efs(t_level_lines_dict_to_lines(t_level_lines_dict))
@@ -509,7 +513,7 @@ async def main():
                         await asyncio.sleep(min(1.0, sleep_time))
                         sleep_time *= 2
                     gpu_return = gpu_proc.return_code()
-                    outs = "\n".join(await gpu_proc.get_output_lines())
+                    outs = "".join(await gpu_proc.get_output_lines())
                     t_level_lines_dict[(old_b1, old_b1)] = (0, curves_per_batch)
                     tlev, efs = t_level.get_t_level_and_efs(t_level_lines_dict_to_lines(t_level_lines_dict))
                     messages[0] = f"t{tlev:0.3f}, efs: {efs:0.3f}" if tlev else ''
@@ -594,16 +598,16 @@ async def main():
                     total_curves_digits = len(str(total_curves))
                     last_time = 0
                     while not all_cpu_processes_done:
-                        if found_factors:
+                        if found_factors or (pretest and tlev >= pretest):
                             # kill cpu processes now that we have factor
                             cancel_tasks(tasks)
                             await kill_processes(cpu_procs)
-                            cofactor, found_factors, fully_factored = new_factors_found(input_number, cofactor, found_factors)
+                            if found_factors:
+                                cofactor, found_factors, fully_factored = new_factors_found(input_number, cofactor, found_factors)
                             await asyncio.sleep(0.2)
                             eprint()
-                            # break out of CPU loop to go see if GPU is done
+                            # break out of CPU loop because factor found
                             break
-
                         all_cpu_processes_done = True
                         using_lines = {}
                         for cpu_proc in cpu_procs:
