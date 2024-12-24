@@ -280,7 +280,7 @@ def get_suggestion_curves(input_lines, start_t, end_t, curves_constraint, B1_con
             t_level = last_t_level
         else:
             logging.debug(
-                f"order {n: >2} t-level estimation: {curves: >4}@{b1_level_string(B1)} = t{t_level:.{args.precision}f}, diff={diff}")
+                f"order {n: >2} t-level estimation: {curves: >4}@{b1_level_string(B1)} = t{t_level:.{precision}f}, diff={diff}")
         if abs(diff) < pow(10, -precision - 1):
             logging.debug("precision achieved, breaking")
             break

@@ -68,8 +68,8 @@ def get_b1_b2_plan():
     # replace this with dynamic b1 level choice
     return [
         (100, 600000),
-        (136808, 8000000),
-        (500000, 15000000),
+        (136808, 4000000),
+        (500000, 8000000),
         (901309, 21288716),
         (1669233, 52732403),
         (2994200, 131737403),
@@ -370,14 +370,14 @@ async def main():
     #     dest="filename",
     #     help="file containing composites to run ecm on",
     # )
-    # parser.add_argument(
-    #     "-w",
-    #     "--work",
-    #     action="store",
-    #     dest="work",
-    #     type=float,
-    #     help="existing t-level of work done, determines starting point of work"
-    # )
+    parser.add_argument(
+        "-w",
+        "--work",
+        action="store",
+        dest="work",
+        type=float,
+        help="existing t-level of work done, determines starting point of work"
+    )
     parser.add_argument(
         "-p",
         "--pretest",
@@ -448,13 +448,13 @@ async def main():
             interrupt_level += 10
         inner_message = ""
         if interrupt_level == 1:
-            inner_message = "won't start another b-level with GPU..."
+            inner_message = "finish GPU and CPU..."
         elif interrupt_level == 2:
-            inner_message = "killing gpu process, finishing CPU curves..."
+            inner_message = "kill GPU, finish CPU..."
             await kill_gpu_procs()
         elif interrupt_level == 3:
-            inner_message = "killing all remaining processes and quitting..."
-        messages[2] = f"Interrupt level: {interrupt_level}{', ' + inner_message if inner_message else ''}"
+            inner_message = "kill all and quit..."
+        messages[2] = f"{interrupt_level}{', ' + inner_message if inner_message else ''}"
         eprint("", end="\r")  # sigint writes a newline on most terminals
         # eprint(message, end="\r")
         if interrupt_level >= 4:
@@ -473,6 +473,12 @@ async def main():
     num_threads = args.threads
     exit_after_one = args.exit_after_one
     pretest = args.pretest
+    work = args.work
+    done_lines_dict = {}
+    if work:
+        done_string, _ = t_level.get_suggestion_curves([], 0, work, None, None, 3, 3)
+        done_line = t_level.convert_string_to_parsed_lines(done_string)[0]
+        done_lines_dict = {(done_line[1], done_line[2]): (done_line[0], done_line[0])}
     curves_per_batch = determine_optimal_num_gpu_curves(install_location, param, gpu_device) if not args.gpu_curves else args.gpu_curves
     with tempfile.TemporaryDirectory() as tmpdir:
         if not sys.stdin.isatty():
@@ -480,7 +486,8 @@ async def main():
         gpu_proc = None
         old_gpu_proc = None
         for input_number in input_numbers:
-            t_level_lines_dict = {}
+            t_level_lines_dict = done_lines_dict
+            next_lines_dict = {}
             tlev = 0
             efs = 0
             await kill_gpu_procs(True)
@@ -500,6 +507,13 @@ async def main():
                     break
                 b1, b2 = plan[i]
                 old_b1, old_b2 = plan[i-1] if i > 0 else plan[i]
+                # check if next run in plan gets us above the passed in work level, if not, skip this level
+                # this is so we skip past the easy work to the productive work for our given -w <t-level>
+                if work and tlev < work:
+                    next_lines_dict = next_lines_dict | {(b1, b2): (curves_per_batch, curves_per_batch)}
+                    next_tlev, _ = t_level.get_t_level_and_efs(t_level_lines_dict_to_lines(next_lines_dict))
+                    if next_tlev < work:
+                        continue
                 if gpu_proc:  # wait for old gpu_proc to finish before continuing with next
                     eprint()
                     sleep_time = 0.01
@@ -514,7 +528,7 @@ async def main():
                         sleep_time *= 2
                     gpu_return = gpu_proc.return_code()
                     outs = "".join(await gpu_proc.get_output_lines())
-                    t_level_lines_dict[(old_b1, old_b1)] = (0, curves_per_batch)
+                    t_level_lines_dict[(old_b1, old_b2)] = (0, curves_per_batch)
                     tlev, efs = t_level.get_t_level_and_efs(t_level_lines_dict_to_lines(t_level_lines_dict))
                     messages[0] = f"t{tlev:0.3f}, efs: {efs:0.3f}" if tlev else ''
                     messages[1] = ''
