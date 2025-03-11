@@ -1,3 +1,0 @@
-gmpy2
-aiofiles
-scipy
