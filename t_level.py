@@ -18,7 +18,9 @@ from functools import cache
 
 
 __license__ = "GPL"
-__version__ = "0.9.6"
+__version__ = "0.9.7"
+
+__DEFAULT_PRECISION__ = 3
 
 conn = sqlite3.connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ecmprobs.db'))
 c = conn.cursor()
@@ -58,6 +60,8 @@ def get_expected_factor_size(dp_list):
 
 
 def get_ecm_success_probs(b1, b2, param):
+    if param is None:
+        param = 1
     # faster to get from cache than recalculate
     if b2 is None and (b1_level_round(b1) == b1 and 10000 <= b1 <= 50000000000):
         c.execute(f"SELECT curves FROM ecm_probs WHERE B1 = ? AND param = ? ORDER BY curves ASC", (b1, param))
@@ -78,6 +82,10 @@ def get_failure_probabilities(b1, b2, curves, param):
     if (math.isinf(b1) or math.isinf(curves)):
         return f
     return list(map(lambda m: pow(1.0 - m, curves), get_ecm_success_probs(b1, b2, param)))
+
+
+def get_t_level(curve_b1_tuples):
+    return get_t_level_and_efs(curve_b1_tuples)[0]
 
 
 def get_t_level_and_efs(curve_b1_tuples):
@@ -115,12 +123,16 @@ def get_t_level_and_efs(curve_b1_tuples):
             y1 = total_fp[i-1]
             y2 = total_fp[i]
             m = y2 - y1
+            if m == 0:
+                t_level = 0
+                break
             y = t_level_threshold
             b = y2 - m * (i + 10)
             t_level = (y - b) / m
             break
 
     return max(0.0, float(t_level)), float(efs)
+
 
 def sci_int(x):
     if x is None or type(x) in [int]:
@@ -133,6 +145,7 @@ def sci_int(x):
     if not match:
         raise ValueError(f"malformed intger string {x}, could not parse into an integer")
     return int(match.group(1)) * pow(10, int(match.group(2)))
+
 
 line_regex = r"\s*(\d+e\d+|\d+)(?:\/(\d+e\d+|\d+))?@(?:B1=)?(\d+e\d+|\d+)(?:,\s*(?:B2=)?(\d+e\d+|\d+))?(?:,\s*(?:(?:param|p)=)?([0-4]))?\s*"
 
@@ -220,6 +233,10 @@ def b1_level_string(b1):
     return f"{b1//pow(10, digits - 1)}e{digits-1}"
 
 
+def get_suggestion_curves_from_t_levels(start_t, end_t):
+    return get_suggestion_curves([], start_t, end_t, None, None, None, __DEFAULT_PRECISION__)
+
+
 def get_suggestion_curves(input_lines, start_t, end_t, curves_constraint, B1_constraint, param, precision):
     # first, find some initial curves@B1 estimates for the given start_t, end_t, and constraints
     B2 = None
@@ -237,7 +254,7 @@ def get_suggestion_curves(input_lines, start_t, end_t, curves_constraint, B1_con
             B1 = b1_level_round(sci_int(B1_constraint))
         else:
             # no constraints, choose B1 first from the regression formula
-            B1 = get_regression_b1_for_t(end_t)
+            B1 = max(get_regression_b1_for_t(end_t), 10000)
         diff_t = end_t - start_t
         # diff = 2 is the point at which the work required will be roughly double
         if diff_t >= 2:
@@ -252,7 +269,7 @@ def get_suggestion_curves(input_lines, start_t, end_t, curves_constraint, B1_con
                       (param, lookup_t, B1))
             curves = round(c.fetchone()[0])
 
-            # if start_t is in the lookup table, subtract those curves from our intial estimate curves
+            # if start_t is in the lookup table, subtract those curves from our initial estimate curves
             if 10 <= start_t <= 100:
                 c.execute("SELECT curves FROM ecm_probs WHERE param = ? AND digits = ? AND B1 = ?",
                           (param, round(start_t), B1))
@@ -297,13 +314,20 @@ def get_suggestion_curves(input_lines, start_t, end_t, curves_constraint, B1_con
             # adjust curves first, maybe then B1 if no constraint
             addend = start_curves * pow(2, -n-1)
             curves += addend * (1 if diff > 0 else -1)
-            curves = round(curves)
+            curves = max(1, round(curves))
             if curves == last_curves and addend != 0:
                 logging.debug(f"terminal curves achieved on iteration {n}: {curves}")
                 break
-    B2 = "" if B2 == None else f",{B2}"
+    return curves, B1, B2, param, t_level
+
+
+def get_suggestion_curves_string(input_lines, start_t, end_t, curves_constraint, B1_constraint, param, precision):
+    curves, B1, B2, param, t_level = get_suggestion_curves(input_lines, start_t, end_t, curves_constraint, B1_constraint, param, precision)
+    B2 = "" if B2 is None else f",{B2}"
     p = "" if param == 1 else f",p={param}"
     return f"{curves}@{b1_level_string(B1)}{B2}{p}", t_level
+
+
 
 
 def get_regression_b1_for_t(end_t):
@@ -312,8 +336,7 @@ def get_regression_b1_for_t(end_t):
     return B1
 
 
-if __name__ == "__main__":
-
+def main():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=f"       echo <curve_string>[;<curve_string>][...] | %(prog)s [options]\n"
@@ -376,7 +399,7 @@ if __name__ == "__main__":
         "--precision",
         action="store",
         dest="precision",
-        default=3,
+        default=DEFAULT_PRECISION,
         type=int,
         help="t-level decimal precision to display"
     )
@@ -480,6 +503,10 @@ if __name__ == "__main__":
     if args.efs:
         print(f"efs:{efs:.{args.precision}f}")
     if args.t_level:
-        curves, new_t_level = get_suggestion_curves(parsed_lines, t_level, args.t_level, args.curves, args.B1, args.param, args.precision)
+        curves, new_t_level = get_suggestion_curves_string(parsed_lines, t_level, args.t_level, args.curves, args.B1, args.param, args.precision)
         print(f"Running the following will get you to t{new_t_level:.{args.precision}f}:")
         print(f"{curves}")
+
+
+if __name__ == "__main__":
+    main()
