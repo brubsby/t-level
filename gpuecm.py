@@ -23,6 +23,7 @@ gpu_proc = old_gpu_proc = cpu_procs = tasks = None
 loop = asyncio.new_event_loop()
 messages = ["", "", ""]
 
+
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
@@ -39,6 +40,17 @@ def nonnegative_integer(arg):
     if val < 0:
         raise ValueError(f"{arg} not a non-negative integer")
     return val
+
+
+# tiny amount of tf to simplify ECM log searching
+def tf(composite):
+    cofactor = composite
+    divisors = []
+    for i in [2, 3, 5, 7, 11, 13]:
+        while cofactor % i == 0:
+            divisors.append(i)
+            cofactor = cofactor // i
+    return cofactor, divisors
 
 
 def locate_gpu_ecm_install():
@@ -67,60 +79,30 @@ def determine_optimal_num_gpu_curves(ecm_path, param, gpu_device):
 def get_b1_b2_plan():
     # replace this with dynamic b1 level choice
     return [
-        (100, 600000),
-        (136808, 4000000),
-        (500000, 8000000),
-        (901309, 21288716),
-        (1669233, 52732403),
-        (2994200, 131737403),
-        (5026497, 352580564),
-        (6872112, 531505103),
-        (14019466, 1443854888),
-        (17829816, 2185199673),
-        (27253419, 4313913596),
-        (33115351, 5777998123),
-        (33117865, 5778623383),
-        (77871012, 23621754325),
-        (77606595, 23492099779),
-        (77744024, 23559486878),
-        (149939404, 70874529876),
-        (150583940, 71319614527),
-        (187054292, 96504234003),
-        (186925087, 96415011427),
-        (186928084, 96417081007),
-        (251865710, 144528548178),
-        (251850112, 144516923636),
-        (319326164, 194825966526),
-        (316463050, 192688956109),
-        (524397977, 388625202894),
+        (145628, 2393438),
+        (928607, 41925067),
+        (1771522, 101780816),
+        (3226570, 350917712),
+        (5572142, 703952402),
+        (9002399, 1450692881),
+        (11381861, 2178275040),
+        (17547145, 4358963387),
+        (21161583, 5777034467),
+        (41477251, 17337754890),
+        (41477451, 17337908706),
+        (49441555, 23462949664),
+        (63061693, 35625232393),
+        (119540944, 97480689734),
+        (119040294, 96935620925),
+        (118551843, 96403833440),
+        (160948703, 145934182071),
+        (159671931, 144434006888),
+        (200832714, 192796897948),
+        (334879708, 393155579274),
+        (423599976, 586254865918),
+        (335023594, 393468746542),
+        (421896206, 582546617747),
     ]
-
-# def get_b1_b2_plan():
-#     # replace this with dynamic b1 level choice
-#     return [
-#         (100, 100000000),
-#         (40434702, 23524201837),
-#         (59868512, 46897505668),
-#         (77569142, 70713526451),
-#         (96980101, 96830777812),
-#         (97044194, 96917014303),
-#         (130465452, 144878169431),
-#         (163525145, 192530863837),
-#         (163516546, 192518469121),
-#         (271217975, 388385545690),
-#         (271227974, 388412217655),
-#         (272381659, 391489629978),
-#         (581431351, 1590060278137),
-#         (690639929, 2384784962810),
-#         (690623430, 2384664897493),
-#         (582285965, 1596279412697),
-#         (821583233, 3218422750288),
-#         (1172685119, 6472256728113),
-#         (1442021083, 9709869363672),
-#         (1163349953, 6371594488808),
-#         (1163357152, 6371671817551),
-#         (1428911694, 9537400540544),
-#     ]
 
 
 # async task to send all the inputs, flush, and then close the stdin, i feel like this shouldn't be so difficult
@@ -146,10 +128,12 @@ async def kill_processes(procs, log=True):
     for proc in procs:
         try:
             if proc is not None:
-                await proc.kill()
+                kill_result = proc.kill()
+                if asyncio.iscoroutine(kill_result):
+                    await kill_result
         except (OSError, TypeError) as e:
             if log:
-                logging.debug(e)
+                logging.exception(e)
 
 
 async def kill_gpu_procs(log=True):
@@ -172,6 +156,7 @@ def cancel_tasks(tasks):
 def reduce_to_coprimes(factors):
     #TODO
     pass
+
 
 # new factors were found, calculate remaining cofactor and if we are done
 def new_factors_found(input_number, old_cofactor, found_factors):
@@ -206,6 +191,16 @@ def new_factors_found(input_number, old_cofactor, found_factors):
             if any_found:
                 break
     found_factors = list(prime_found_factors) + list(composite_found_factors)
+    all_factors = []
+
+    # deal with powers
+    cofactor = input_number
+    for i in sorted(found_factors):
+        while gmpy2.is_divisible(cofactor, i):
+            all_factors.append(i)
+            cofactor = cofactor // i
+
+    found_factors = all_factors
 
     # if all found_factors recreate the input_number, we're done
     # it's possible there are composites in found_factors, but if ECM found them,
@@ -476,7 +471,7 @@ async def main():
     work = args.work
     done_lines_dict = {}
     if work:
-        done_string, _ = t_level.get_suggestion_curves([], 0, work, None, None, 3, 3)
+        done_string, _ = t_level.get_suggestion_curves_string([], 0, work, None, None, 3, 3)
         done_line = t_level.convert_string_to_parsed_lines(done_string)[0]
         done_lines_dict = {(done_line[1], done_line[2]): (done_line[0], done_line[0])}
     curves_per_batch = determine_optimal_num_gpu_curves(install_location, param, gpu_device) if not args.gpu_curves else args.gpu_curves
@@ -495,13 +490,12 @@ async def main():
             old_gpu_proc = None
             temp_save_file_path = None
             eprint(f"# N = {input_number}", end="")
-            fully_factored = gmpy2.is_prime(input_number)
-            cofactor = input_number
+            cofactor, found_factors = tf(input_number)
+            fully_factored = gmpy2.is_prime(cofactor)
             plan = get_b1_b2_plan()
-            found_factors = []
             for i in range(len(plan)):
                 if fully_factored or (found_factors and exit_after_one):
-                    print(f"{input_number}={found_factors}")
+                    print(f"{input_number}={sorted(found_factors)}")
                     break
                 if pretest and tlev >= pretest:
                     break
@@ -558,20 +552,21 @@ async def main():
                                 eprint(f"********** BIG GPU ECM STAGE-1 HIT: TELL YOUR FRIENDS! SIGMA={params[1]}:{params[2]} **********")
                                 eprint(gpu_factors, end="")
                         cofactor, found_factors, fully_factored = new_factors_found(input_number, cofactor, found_factors)
-                        eprint()
+                        eprint(f"# {','.join(map(str, sorted(found_factors))): <{shutil.get_terminal_size().columns}}")
                     if fully_factored or (found_factors and exit_after_one):
                         eprint()
-                        print(f"{input_number}={found_factors}")
+                        print(f"{input_number}={sorted(found_factors)}")
                         break
 
                     # eprint(outs)
                     # eprint(errs)
                     # print(f"\n\nsigma={param}:{low_sigma}-{param}:{high_sigma}")
-                    if gpu_return == 8:  # found factor(s)
-                        eprint("Found factors, but couldn't find in stdout, weird...")
+                    if gpu_return in [2, 6, 8]:  # found factor(s)
                         # eprint(outs)
                         # eprint(errs)
-                        await shutdown(1)
+                        # don't kill here because we might need to find more factors
+                        # await shutdown(1)
+                        pass
                     elif gpu_return in [0, 143]:  # no factors found, but no errors, 143 is sigterm
                         pass
                     elif interrupt_level >= 2:  # user requested killing GPU, it won't have any results
@@ -607,19 +602,21 @@ async def main():
                         tasks.append(asyncio.create_task(handle_stdin(input_queue, cpu_proc.stdin)))
                         cpu_procs.append(cpu_proc)
                     all_cpu_processes_done = False
+                    cpu_found_factors = []
                     count = 0
                     total_curves = len(residue_lines)
                     total_curves_digits = len(str(total_curves))
                     last_time = 0
                     while not all_cpu_processes_done:
-                        if found_factors or (pretest and tlev >= pretest):
+                        if cpu_found_factors or (pretest and tlev >= pretest):
                             # kill cpu processes now that we have factor
                             cancel_tasks(tasks)
                             await kill_processes(cpu_procs)
-                            if found_factors:
+                            if cpu_found_factors:
+                                found_factors += cpu_found_factors
                                 cofactor, found_factors, fully_factored = new_factors_found(input_number, cofactor, found_factors)
+                                eprint(f"\n# {','.join(map(str, sorted(found_factors))): <{shutil.get_terminal_size().columns}}")
                             await asyncio.sleep(0.2)
-                            eprint()
                             # break out of CPU loop because factor found
                             break
                         all_cpu_processes_done = True
@@ -663,6 +660,7 @@ async def main():
                                         if math.log10(found_factor) >= factor_size_sigma_report_threshold:
                                             eprint(f"********** BIG ECM STAGE-2 HIT: TELL YOUR FRIENDS! **********")
                                             eprint(using_lines[cpu_proc])
+                                        cpu_found_factors.append(found_factor)
                                         found_factors.append(found_factor)
                                         break
                                     else:
