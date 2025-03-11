@@ -1,0 +1,13 @@
+[project]
+name = "t-level"
+description = "Command line utility for calculating the t-level achieved by running a given number of ECM curves."
+dependencies = [
+    "gmpy2",
+    "aiofiles",
+    "scipy"
+]
+dynamic = ["version"]
+[project.scripts]
+t-level = "t_level:main"
+[tool.setuptools]
+py-modules = ["t_level", "rho"]
