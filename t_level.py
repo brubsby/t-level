@@ -22,7 +22,7 @@ __version__ = "0.9.7"
 
 __DEFAULT_PRECISION__ = 3
 
-conn = sqlite3.connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ecmprobs.db'))
+conn = sqlite3.connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ecmprobs.db'), check_same_thread=False)
 c = conn.cursor()
 
 
@@ -84,15 +84,7 @@ def get_failure_probabilities(b1, b2, curves, param):
     return list(map(lambda m: pow(1.0 - m, curves), get_ecm_success_probs(b1, b2, param)))
 
 
-def get_t_level(curve_b1_tuples):
-    return get_t_level_and_efs(curve_b1_tuples)[0]
-
-
-def get_t_level_and_efs(curve_b1_tuples):
-
-    if len(curve_b1_tuples) == 0:
-        return 0.0, 0.0
-
+def get_probabilities(curve_b1_tuples):
     fp = []
     total_fp = []
 
@@ -114,6 +106,20 @@ def get_t_level_and_efs(curve_b1_tuples):
         total_sp = [1.0 - fp for fp in total_fp]
 
     total_dp = get_differential_probability(total_fp)
+    return total_fp, total_sp, total_dp
+
+
+def get_t_level(curve_b1_tuples):
+    return get_t_level_and_efs(curve_b1_tuples)[0]
+
+
+def get_t_level_and_efs(curve_b1_tuples):
+
+    if len(curve_b1_tuples) == 0:
+        return 0.0, 0.0
+
+    total_fp, total_sp, total_dp = get_probabilities(curve_b1_tuples)
+
     t_level = 0
     efs = get_expected_factor_size(total_dp)
 
@@ -184,9 +190,16 @@ def validate_line(line_tup):
     return True
 
 
+def convert_lines_to_curve_at_b1_tuples(parsed_lines):
+    return list(map(lambda line: (line[0], line[1], line[2], line[3]), parsed_lines))
+
+
 def convert_lines_to_t_level_and_efs(parsed_lines):
-    c_at_b1_tuples = list(map(lambda line: (line[0], line[1], line[2], line[3]), parsed_lines))
-    return get_t_level_and_efs(c_at_b1_tuples)
+    return get_t_level_and_efs(convert_lines_to_curve_at_b1_tuples(parsed_lines))
+
+
+def string_to_t_level(input_string):
+    return get_t_level(convert_lines_to_curve_at_b1_tuples(convert_string_to_parsed_lines(input_string)))
 
 
 def convert_string_to_parsed_lines(input_string, validation=True):
@@ -204,7 +217,7 @@ def convert_string_to_t_level_and_efs(input_string):
     return convert_lines_to_t_level_and_efs(parsed_lines)
 
 
-def get_t_level_curves(t_level, precision):
+def get_t_level_curves(t_level, precision=__DEFAULT_PRECISION__):
     c.execute("SELECT b1, curves, MIN(ABS(curves - 10000)) FROM ecm_probs WHERE param = 1 AND digits = ?",
               (max(10, min(round(t_level), 100)),))
     b1, curves, _ = c.fetchone()
@@ -215,12 +228,18 @@ def get_t_level_curves(t_level, precision):
         diff = t_level - this_t
         if n >= 19 or abs(diff) < pow(10, -precision)/2:
             logging.debug("precision achieved, breaking")
-            return f"{curves}@{b1}"
+            return curves, b1
         last_curves = curves
         curves = max(1, int(curves * pow(2, diff / 2)))
         if curves == last_curves:
             logging.debug("stopped moving, breaking")
-            return f"{curves}@{b1}"
+            return curves, b1
+
+
+@cache
+def get_t_level_curves_string(t_level, precision=__DEFAULT_PRECISION__):
+    curves, b1 = get_t_level_curves(t_level, precision=precision)
+    return f"{curves}@{b1}"
 
 
 def b1_level_round(b1):
@@ -233,8 +252,9 @@ def b1_level_string(b1):
     return f"{b1//pow(10, digits - 1)}e{digits-1}"
 
 
+@cache
 def get_suggestion_curves_from_t_levels(start_t, end_t):
-    return get_suggestion_curves([], start_t, end_t, None, None, None, __DEFAULT_PRECISION__)
+    return get_suggestion_curves(convert_string_to_parsed_lines(get_t_level_curves_string(start_t)), start_t, end_t, None, None, None, __DEFAULT_PRECISION__)
 
 
 def get_suggestion_curves(input_lines, start_t, end_t, curves_constraint, B1_constraint, param, precision):
@@ -254,7 +274,7 @@ def get_suggestion_curves(input_lines, start_t, end_t, curves_constraint, B1_con
             B1 = b1_level_round(sci_int(B1_constraint))
         else:
             # no constraints, choose B1 first from the regression formula
-            B1 = max(get_regression_b1_for_t(end_t), 10000)
+            B1 = max(b1_level_round(get_regression_b1_for_t(end_t)), 10000)
         diff_t = end_t - start_t
         # diff = 2 is the point at which the work required will be roughly double
         if diff_t >= 2:
@@ -332,8 +352,51 @@ def get_suggestion_curves_string(input_lines, start_t, end_t, curves_constraint,
 
 def get_regression_b1_for_t(end_t):
     # from https://members.loria.fr/PZimmermann/records/ecm/params.html
-    B1 = b1_level_round(math.exp(0.0750 * math.log2(pow(10, end_t)) + 5.332))
+    B1 = int(math.exp(0.0750 * math.log2(pow(10, end_t)) + 5.332))
     return B1
+
+
+def graph_parsed_lines(work_lines, parsed_lines):
+    work_fp, work_sp, work_dp = get_probabilities(convert_lines_to_curve_at_b1_tuples(work_lines))
+    next_fp, next_sp, next_dp = get_probabilities(convert_lines_to_curve_at_b1_tuples(parsed_lines))
+    x = list(range(10,101))
+    digits = 100
+    composite = pow(10,digits)
+    rho.rhoinit(256,30)
+    dickman_mu = [rho.dickmanmu(digits/i, digits/i , composite) for i in x]
+    mu_prior = [dickman_mu[i] * work_fp[i] for i in range(len(next_sp))]
+    merten = [0.56146 for i in x]
+    dickman_local = [rho.dickmanrho(digits/i) for i in x]
+    work_dickman_local = [dickman_local[i] * work_fp[i] for i in range(len(next_sp))]
+    next_dickman_local = [dickman_local[i] * next_fp[i] for i in range(len(next_sp))]
+    diff_dickman_local = [work_dickman_local[i] - next_dickman_local[i] for i in range(len(next_sp))]
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    plt.rcParams["figure.figsize"] = (10, 3)
+    plt.xticks(range(10, 101, 5))
+    plt.yticks(list(map(lambda x: x * 0.1, range(0, 11, 1))))
+    plt.plot(x, work_fp, label="prev fail prob")
+    plt.plot(x, work_sp, label="prev success prob")
+    # plt.plot(x, work_dp, label="work dp")
+    plt.plot(x, next_fp, label="next failure prob")
+    plt.plot(x, next_sp, label="next success prob")
+    # plt.plot(x, next_dp, label="dp")
+    plt.plot(x, dickman_mu, label="rho mu")
+    plt.plot(x, dickman_local, label=f"rho")
+    # plt.plot(x, work_dickman_local, label="workdick")
+    # plt.plot(x, next_dickman_local, label="nextdick")
+    # plt.plot(x, diff_dickman_local, label="diffdick")
+    # plt.plot(x, mu_prior, label="mu prior")
+    plt.legend()
+    plt.tight_layout()
+    plt.xlim(10, 100)
+    plt.ylim(0, 1)
+    plt.xlabel("p-digits")
+    plt.ylabel("probability")
+    # plt.savefig('B2_timing.png')
+    plt.show()
+    pass
 
 
 def main():
@@ -399,7 +462,7 @@ def main():
         "--precision",
         action="store",
         dest="precision",
-        default=DEFAULT_PRECISION,
+        default=__DEFAULT_PRECISION__,
         type=int,
         help="t-level decimal precision to display"
     )
@@ -449,6 +512,13 @@ def main():
         type=str,
         help="constrain suggested B1 to a value, use with -t"
     )
+    parser.add_argument(
+        "-g",
+        "--graph",
+        action="store_true",
+        dest="graph",
+        help="use matplotlib to visualize the probability density functions"
+    )
     args = parser.parse_args()
 
     loglevel = logging.WARNING
@@ -487,11 +557,15 @@ def main():
         if args.work < 5 or args.work > 100:
             print("-w flag must be >= 5 and <= 100")
             sys.exit(1)
-        curve_inputs.append(get_t_level_curves(args.work, args.precision))
+        work_input = get_t_level_curves_string(args.work, args.precision)
+        curve_inputs.append(work_input)
 
     input_string = "\n".join(curve_inputs).strip()
     try:
         parsed_lines = convert_string_to_parsed_lines(input_string)
+        if args.graph:
+            parsed_work_lines = convert_string_to_parsed_lines(work_input) if args.work else ""
+            graph_parsed_lines(parsed_work_lines, parsed_lines)
         t_level, efs = convert_lines_to_t_level_and_efs(parsed_lines)
     except ValueError as e:
         if loglevel < logging.INFO:
