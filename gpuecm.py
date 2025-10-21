@@ -12,6 +12,8 @@ import argparse
 import itertools
 import subprocess
 import time
+from rich.live import Live
+from rich.console import Console
 
 import gmpy2
 from aiofiles import os as aios
@@ -22,6 +24,7 @@ interrupt_level = 0
 gpu_proc = old_gpu_proc = cpu_procs = tasks = None
 loop = asyncio.new_event_loop()
 messages = ["", "", ""]
+message = ""
 
 
 def eprint(*args, **kwargs):
@@ -76,32 +79,62 @@ def determine_optimal_num_gpu_curves(ecm_path, param, gpu_device):
             return int(match.group(1))
     assert False, "Couldn't determine optimal number of gpu curves"
 
+
+# def get_b1_b2_plan():
+#     # replace this with dynamic b1 level choice
+#     return [
+#         (145628, 2393438),
+#         (928607, 41925067),
+#         (1771522, 101780816),
+#         (3226570, 350917712),
+#         (5572142, 703952402),
+#         (9002399, 1450692881),
+#         (11381861, 2178275040),
+#         (17547145, 4358963387),
+#         (21161583, 5777034467),
+#         (41477251, 17337754890),
+#         (41477451, 17337908706),
+#         (49441555, 23462949664),
+#         (63061693, 35625232393),
+#         (119540944, 97480689734),
+#         (119040294, 96935620925),
+#         (118551843, 96403833440),
+#         (160948703, 145934182071),
+#         (159671931, 144434006888),
+#         (200832714, 192796897948),
+#         (334879708, 393155579274),
+#         (423599976, 586254865918),
+#         (335023594, 393468746542),
+#         (421896206, 582546617747),
+#     ]
+
+
 def get_b1_b2_plan():
     # replace this with dynamic b1 level choice
     return [
-        (145628, 2393438),
-        (928607, 41925067),
-        (1771522, 101780816),
-        (3226570, 350917712),
-        (5572142, 703952402),
-        (9002399, 1450692881),
-        (11381861, 2178275040),
-        (17547145, 4358963387),
-        (21161583, 5777034467),
-        (41477251, 17337754890),
-        (41477451, 17337908706),
-        (49441555, 23462949664),
-        (63061693, 35625232393),
-        (119540944, 97480689734),
-        (119040294, 96935620925),
-        (118551843, 96403833440),
-        (160948703, 145934182071),
-        (159671931, 144434006888),
-        (200832714, 192796897948),
-        (334879708, 393155579274),
-        (423599976, 586254865918),
-        (335023594, 393468746542),
-        (421896206, 582546617747),
+        (143962, 1407821),
+        (814918, 21124193),
+        (1716628, 62981669),
+        (3750224, 262311004),
+        (6191880, 529609495),
+        (12650034, 1445188605),
+        (16007699, 2169532515),
+        (29815818, 5771012109),
+        (29814318, 5770594726),
+        (70035494, 23549575248),
+        (70284370, 23685005997),
+        (69941405, 23498374876),
+        (103729266, 46940079524),
+        (104481207, 47517151233),
+        (168091989, 96334788091),
+        (168092289, 96335018324),
+        (168104987, 96344763312),
+        (226746123, 144624265179),
+        (226732624, 144613084733),
+        (285122984, 192974465012),
+        (286200777, 193867139028),
+        (471887306, 388561294312),
+        (728811011, 782897237972),
     ]
 
 
@@ -428,248 +461,260 @@ async def main():
 
     args = parser.parse_args()
 
-    loglevel = logging.WARNING
-    if args.verbose > 0:
-        loglevel = logging.INFO
-    if args.verbose > 1:
-        loglevel = logging.DEBUG
-    logging.basicConfig(level=loglevel, format="%(message)s")
+    console = Console(highlight=False)
+    livetext = []
 
-    async def handle_signals(signame):
-        global interrupt_level, messages
-        if signame == 'SIGINT':
-             interrupt_level += 1
-        if signame == 'SIGTERM':
-            interrupt_level += 10
-        inner_message = ""
-        if interrupt_level == 1:
-            inner_message = "finish GPU and CPU..."
-        elif interrupt_level == 2:
-            inner_message = "kill GPU, finish CPU..."
-            await kill_gpu_procs()
-        elif interrupt_level == 3:
-            inner_message = "kill all and quit..."
-        messages[2] = f"{interrupt_level}{', ' + inner_message if inner_message else ''}"
-        eprint("", end="\r")  # sigint writes a newline on most terminals
-        # eprint(message, end="\r")
-        if interrupt_level >= 4:
-            eprint("\n# Shutting Down...", end="")
-            await shutdown(1)
+    with Live(console=console, auto_refresh=False) as live:
 
-    for signame in ('SIGINT', 'SIGTERM'):
-        loop.add_signal_handler(getattr(signal, signame),
-                                lambda signame=signame: asyncio.create_task(handle_signals(signame)))
+        loglevel = logging.WARNING
+        if args.verbose > 0:
+            loglevel = logging.INFO
+        if args.verbose > 1:
+            loglevel = logging.DEBUG
+        logging.basicConfig(level=loglevel, format="%(message)s")
 
-    input_numbers = []
-    param = 3
-    factor_size_sigma_report_threshold = 60
-    install_location = locate_gpu_ecm_install()
-    gpu_device = args.gpu_device
-    num_threads = args.threads
-    exit_after_one = args.exit_after_one
-    pretest = args.pretest
-    work = args.work
-    done_lines_dict = {}
-    if work:
-        done_string, _ = t_level.get_suggestion_curves_string([], 0, work, None, None, 3, 3)
-        done_line = t_level.convert_string_to_parsed_lines(done_string)[0]
-        done_lines_dict = {(done_line[1], done_line[2]): (done_line[0], done_line[0])}
-    curves_per_batch = determine_optimal_num_gpu_curves(install_location, param, gpu_device) if not args.gpu_curves else args.gpu_curves
-    with tempfile.TemporaryDirectory() as tmpdir:
-        if not sys.stdin.isatty():
-            input_numbers = list(map(int, sys.stdin.read().strip().split("\n")))
-        gpu_proc = None
-        old_gpu_proc = None
-        for input_number in input_numbers:
-            t_level_lines_dict = done_lines_dict
-            next_lines_dict = {}
-            tlev = 0
-            efs = 0
-            await kill_gpu_procs(True)
+        def update():
+            output = "\n".join(livetext)
+            live.update(message + "\n" + output, refresh=True)
+
+        async def handle_signals(signame):
+            global interrupt_level, messages, message
+            if signame == 'SIGINT':
+                 interrupt_level += 1
+            if signame == 'SIGTERM':
+                interrupt_level += 10
+            inner_message = ""
+            if interrupt_level == 1:
+                inner_message = "finish GPU and CPU..."
+            elif interrupt_level == 2:
+                inner_message = "kill GPU, finish CPU..."
+                await kill_gpu_procs()
+            elif interrupt_level == 3:
+                inner_message = "kill all and quit..."
+            messages[2] = f"{interrupt_level}{', ' + inner_message if inner_message else ''}"
+            message = f'# {", ".join(filter(bool, messages))}'
+            update()
+            if interrupt_level >= 4:
+                console.log("\nShutting Down...", end="")
+                await shutdown(1)
+
+        for signame in ('SIGINT', 'SIGTERM'):
+            loop.add_signal_handler(getattr(signal, signame),
+                                    lambda signame=signame: asyncio.create_task(handle_signals(signame)))
+
+        input_numbers = []
+        param = 3
+        factor_size_sigma_report_threshold = 60
+        install_location = locate_gpu_ecm_install()
+        gpu_device = args.gpu_device
+        num_threads = args.threads
+        exit_after_one = args.exit_after_one
+        pretest = args.pretest
+        work = args.work
+        done_lines_dict = {}
+        if work:
+            done_string, _ = t_level.get_suggestion_curves_string([], 0, work, None, None, 3, 3)
+            done_line = t_level.convert_string_to_parsed_lines(done_string)[0]
+            done_lines_dict = {(done_line[1], done_line[2]): (done_line[0], done_line[0])}
+        curves_per_batch = determine_optimal_num_gpu_curves(install_location, param, gpu_device) if not args.gpu_curves else args.gpu_curves
+        with tempfile.TemporaryDirectory() as tmpdir:
+            if not sys.stdin.isatty():
+                input_numbers = list(map(int, sys.stdin.read().strip().split("\n")))
             gpu_proc = None
             old_gpu_proc = None
-            temp_save_file_path = None
-            eprint(f"# N = {input_number}", end="")
-            cofactor, found_factors = tf(input_number)
-            fully_factored = gmpy2.is_prime(cofactor)
-            plan = get_b1_b2_plan()
-            for i in range(len(plan)):
-                if fully_factored or (found_factors and exit_after_one):
-                    print(f"{input_number}={sorted(found_factors)}")
-                    break
-                if pretest and tlev >= pretest:
-                    break
-                b1, b2 = plan[i]
-                old_b1, old_b2 = plan[i-1] if i > 0 else plan[i]
-                # check if next run in plan gets us above the passed in work level, if not, skip this level
-                # this is so we skip past the easy work to the productive work for our given -w <t-level>
-                if work and tlev < work:
-                    next_lines_dict = next_lines_dict | {(b1, b2): (curves_per_batch, curves_per_batch)}
-                    next_tlev, _ = t_level.get_t_level_and_efs(t_level_lines_dict_to_lines(next_lines_dict))
-                    if next_tlev < work:
-                        continue
-                if gpu_proc:  # wait for old gpu_proc to finish before continuing with next
-                    eprint()
-                    sleep_time = 0.01
-                    while gpu_proc.return_code() is None:
+            for input_number in input_numbers:
+                t_level_lines_dict = done_lines_dict
+                next_lines_dict = {}
+                tlev = 0
+                efs = 0
+                await kill_gpu_procs(True)
+                gpu_proc = None
+                old_gpu_proc = None
+                temp_save_file_path = None
+                console.log(f"Running ECM against input number: {input_number}")
+                cofactor, found_factors = tf(input_number)
+                fully_factored = gmpy2.is_prime(cofactor)
+                plan = get_b1_b2_plan()
+                for i in range(len(plan)):
+                    if fully_factored or (found_factors and exit_after_one):
+                        console.log(f"{input_number}={sorted(found_factors)}")
+                        break
+                    if pretest and tlev >= pretest:
+                        break
+                    b1, b2 = plan[i]
+                    old_b1, old_b2 = plan[i-1] if i > 0 else plan[i]
+                    # check if next run in plan gets us above the passed in work level, if not, skip this level
+                    # this is so we skip past the easy work to the productive work for our given -w <t-level>
+                    if work and tlev < work:
+                        next_lines_dict = next_lines_dict | {(b1, b2): (curves_per_batch, curves_per_batch)}
+                        next_tlev, _ = t_level.get_t_level_and_efs(t_level_lines_dict_to_lines(next_lines_dict))
+                        if next_tlev < work:
+                            continue
+                    if gpu_proc:  # wait for old gpu_proc to finish before continuing with next
+                        livetext.append("")
+                        sleep_time = 0.01
+                        while gpu_proc.return_code() is None:
+                            tlev, efs = t_level.get_t_level_and_efs(t_level_lines_dict_to_lines(t_level_lines_dict))
+                            messages[0] = f"t{tlev:0.3f}, efs: {efs:0.3f}" if tlev else ''
+                            messages[1] = f"gpu: {gpu_proc.percentage_progress_string()}" if gpu_proc and gpu_proc.has_eta() else ''
+                            message = f'# {", ".join(filter(bool, messages))}'
+                            status_line = f"#{0: >{len(str(curves_per_batch))}}/{curves_per_batch}@{old_b1},{old_b2},{param}"
+                            livetext[-1] = f"{status_line}"
+                            update()
+                            await asyncio.sleep(min(1.0, sleep_time))
+                            sleep_time *= 2
+                        gpu_return = gpu_proc.return_code()
+                        outs = "".join(await gpu_proc.get_output_lines())
+                        t_level_lines_dict[(old_b1, old_b2)] = (0, curves_per_batch)
                         tlev, efs = t_level.get_t_level_and_efs(t_level_lines_dict_to_lines(t_level_lines_dict))
                         messages[0] = f"t{tlev:0.3f}, efs: {efs:0.3f}" if tlev else ''
-                        messages[1] = f"gpu: {gpu_proc.percentage_progress_string()}" if gpu_proc and gpu_proc.has_eta() else ''
+                        messages[1] = ''
                         message = f'# {", ".join(filter(bool, messages))}'
-                        status_line = f"#{0: >{len(str(curves_per_batch))}}/{curves_per_batch}@{old_b1},{old_b2},{param}  {message}"
-                        eprint(f"{status_line: <{shutil.get_terminal_size().columns}}", end="\r")
-                        await asyncio.sleep(min(1.0, sleep_time))
-                        sleep_time *= 2
-                    gpu_return = gpu_proc.return_code()
-                    outs = "".join(await gpu_proc.get_output_lines())
-                    t_level_lines_dict[(old_b1, old_b2)] = (0, curves_per_batch)
-                    tlev, efs = t_level.get_t_level_and_efs(t_level_lines_dict_to_lines(t_level_lines_dict))
-                    messages[0] = f"t{tlev:0.3f}, efs: {efs:0.3f}" if tlev else ''
-                    messages[1] = ''
-                    message = f'# {", ".join(filter(bool, messages))}'
-                    status_line = f" {0: >{len(str(curves_per_batch))}}/{curves_per_batch}@{old_b1},{old_b2},{param}  {message}"
-                    eprint(f"{status_line: <{shutil.get_terminal_size().columns}}", end="\r")
-                    errs = ""
-                    sigma_match = re.search(r"sigma=(\d+):(\d+)-(?:\d+:)?(\d+)", outs)
-                    try:
-                        assert sigma_match is not None, "Couldn't find sigma range in ecm gpu output"
-                        param = int(sigma_match.group(1))
-                        low_sigma = int(sigma_match.group(2))
-                        high_sigma = int(sigma_match.group(3))
-                    except (AssertionError, AttributeError) as e:
-                        if not interrupt_level:
-                            raise e
+                        status_line = f" {0: >{len(str(curves_per_batch))}}/{curves_per_batch}@{old_b1},{old_b2},{param}"
+                        livetext[-1] = f"{status_line}"
+                        update()
+                        errs = ""
+                        sigma_match = re.search(r"sigma=(\d+):(\d+)-(?:\d+:)?(\d+)", outs)
+                        try:
+                            assert sigma_match is not None, "Couldn't find sigma range in ecm gpu output"
+                            param = int(sigma_match.group(1))
+                            low_sigma = int(sigma_match.group(2))
+                            high_sigma = int(sigma_match.group(3))
+                        except (AssertionError, AttributeError) as e:
+                            if not interrupt_level:
+                                raise e
 
-                    factor_matches = re.findall(
-                        r"GPU: factor (\d+) found in Step 1 with curve (\d+) \(-sigma (\d+):(\d+)\)", outs)
-                    # save earliest hit per factor, (factor, curve_n, param, sigma)
-                    gpu_factors = dict(map(lambda x: (int(x[0]), tuple(map(int, x[1:]))), reversed(factor_matches)))
-                    if gpu_factors:
-                        found_factors.extend(gpu_factors.keys())
-                        for factor, params in gpu_factors.items():
-                            if math.log10(factor) >= factor_size_sigma_report_threshold:
-                                eprint()
-                                eprint(f"********** BIG GPU ECM STAGE-1 HIT: TELL YOUR FRIENDS! SIGMA={params[1]}:{params[2]} **********")
-                                eprint(gpu_factors, end="")
-                        cofactor, found_factors, fully_factored = new_factors_found(input_number, cofactor, found_factors)
-                        eprint(f"# {','.join(map(str, sorted(found_factors))): <{shutil.get_terminal_size().columns}}")
-                    if fully_factored or (found_factors and exit_after_one):
-                        eprint()
-                        print(f"{input_number}={sorted(found_factors)}")
-                        break
-
-                    # eprint(outs)
-                    # eprint(errs)
-                    # print(f"\n\nsigma={param}:{low_sigma}-{param}:{high_sigma}")
-                    if gpu_return in [2, 6, 8]:  # found factor(s)
-                        # eprint(outs)
-                        # eprint(errs)
-                        # don't kill here because we might need to find more factors
-                        # await shutdown(1)
-                        pass
-                    elif gpu_return in [0, 143]:  # no factors found, but no errors, 143 is sigterm
-                        pass
-                    elif interrupt_level >= 2:  # user requested killing GPU, it won't have any results
-                        pass
-                    else:  # errors probably
-                        eprint(errs)
-                        eprint(outs)
-                        raise Exception(f"{errs}\nGPU process exited with {gpu_return}")
-                old_temp_save_file_path = temp_save_file_path
-                old_gpu_proc = gpu_proc
-                temp_save_file_path = None
-                gpu_proc = None
-                if interrupt_level == 0:  # only make gpu process if we're not interrupted
-                    temp_save_file_name = f"{hash(input_number)}_{b1}_stg1_residues"
-                    temp_save_file_path = os.path.join(tmpdir, temp_save_file_name)
-                    gpu_proc = await create_gpu_proc(install_location, gpu_device, curves_per_batch, temp_save_file_path, b1, cofactor)
-
-                if old_temp_save_file_path and await aios.path.isfile(old_temp_save_file_path):
-                    # run cpu curves
-                    residue_lines = pathlib.Path(old_temp_save_file_path).read_text().strip().split("\n")
-                    cpu_ecm_args = [install_location, "-resume", "-", str(old_b1), str(old_b2)]
-                    cpu_procs = []
-                    input_queue = asyncio.Queue()
-                    for residue_line in residue_lines:
-                        await input_queue.put(residue_line)
-                    tasks = []
-                    for i in range(num_threads):
-                        cpu_proc = await asyncio.create_subprocess_exec(*cpu_ecm_args,
-                                                                        stdout=asyncio.subprocess.PIPE,
-                                                                        stdin=asyncio.subprocess.PIPE,
-                                                                        stderr=asyncio.subprocess.STDOUT,
-                                                                        process_group=0)
-                        tasks.append(asyncio.create_task(handle_stdin(input_queue, cpu_proc.stdin)))
-                        cpu_procs.append(cpu_proc)
-                    all_cpu_processes_done = False
-                    cpu_found_factors = []
-                    count = 0
-                    total_curves = len(residue_lines)
-                    total_curves_digits = len(str(total_curves))
-                    last_time = 0
-                    while not all_cpu_processes_done:
-                        if cpu_found_factors or (pretest and tlev >= pretest):
-                            # kill cpu processes now that we have factor
-                            cancel_tasks(tasks)
-                            await kill_processes(cpu_procs)
-                            if cpu_found_factors:
-                                found_factors += cpu_found_factors
-                                cofactor, found_factors, fully_factored = new_factors_found(input_number, cofactor, found_factors)
-                                eprint(f"\n# {','.join(map(str, sorted(found_factors))): <{shutil.get_terminal_size().columns}}")
-                            await asyncio.sleep(0.2)
-                            # break out of CPU loop because factor found
+                        factor_matches = re.findall(
+                            r"GPU: factor (\d+) found in Step 1 with curve (\d+) \(-sigma (\d+):(\d+)\)", outs)
+                        # save earliest hit per factor, (factor, curve_n, param, sigma)
+                        gpu_factors = dict(map(lambda x: (int(x[0]), tuple(map(int, x[1:]))), reversed(factor_matches)))
+                        if gpu_factors:
+                            found_factors.extend(gpu_factors.keys())
+                            for factor, params in gpu_factors.items():
+                                if math.log10(factor) >= factor_size_sigma_report_threshold:
+                                    console.log(f"********** BIG GPU ECM STAGE-1 HIT: TELL YOUR FRIENDS! SIGMA={params[1]}:{params[2]} **********")
+                                    console.log(gpu_factors)
+                            cofactor, found_factors, fully_factored = new_factors_found(input_number, cofactor, found_factors)
+                            console.log(f"GPU factors found: {','.join(map(str, sorted(found_factors)))}")
+                        if fully_factored or (found_factors and exit_after_one):
+                            livetext.append("")
+                            console.log(f"{input_number}={sorted(found_factors)}")
                             break
-                        all_cpu_processes_done = True
-                        using_lines = {}
-                        for cpu_proc in cpu_procs:
-                            line = await cpu_proc.stdout.readline()
-                            if interrupt_level >= 3:  # stop processing CPU
-                                t_level_lines_dict[(old_b1, old_b2)] = (count, total_curves)
-                                tlev, efs = t_level.get_t_level_and_efs(t_level_lines_dict_to_lines(t_level_lines_dict))
-                                messages[0] = f"t{tlev:0.3f}, efs: {efs:0.3f}" if tlev else ''
-                                messages[1] = f"gpu: {gpu_proc.percentage_progress_string()}" if gpu_proc else ''
-                                message = f'# {", ".join(filter(bool, messages))}'
-                                status_line = f" {count: >{len(str(curves_per_batch))}}/{curves_per_batch}@{old_b1},{old_b2},{param}  {message}"
-                                eprint(f"{status_line: <{shutil.get_terminal_size().columns}}", end="\r")
+
+                        # console.log(outs)
+                        # console.log(errs)
+                        # print(f"\n\nsigma={param}:{low_sigma}-{param}:{high_sigma}")
+                        if gpu_return in [2, 6, 8]:  # found factor(s)
+                            # console.log(outs)
+                            # console.log(errs)
+                            # don't kill here because we might need to find more factors
+                            # await shutdown(1)
+                            pass
+                        elif gpu_return in [0, 143]:  # no factors found, but no errors, 143 is sigterm
+                            pass
+                        elif interrupt_level >= 2:  # user requested killing GPU, it won't have any results
+                            pass
+                        else:  # errors probably
+                            console.log(errs)
+                            console.log(outs)
+                            raise Exception(f"{errs}\nGPU process exited with {gpu_return}")
+                    old_temp_save_file_path = temp_save_file_path
+                    old_gpu_proc = gpu_proc
+                    temp_save_file_path = None
+                    gpu_proc = None
+                    if interrupt_level == 0:  # only make gpu process if we're not interrupted
+                        temp_save_file_name = f"{hash(input_number)}_{b1}_stg1_residues"
+                        temp_save_file_path = os.path.join(tmpdir, temp_save_file_name)
+                        gpu_proc = await create_gpu_proc(install_location, gpu_device, curves_per_batch, temp_save_file_path, b1, cofactor)
+
+                    if old_temp_save_file_path and await aios.path.isfile(old_temp_save_file_path):
+                        # run cpu curves
+                        residue_lines = pathlib.Path(old_temp_save_file_path).read_text().strip().split("\n")
+                        cpu_ecm_args = [install_location, "-resume", "-", str(old_b1), str(old_b2)]
+                        cpu_procs = []
+                        input_queue = asyncio.Queue()
+                        for residue_line in residue_lines:
+                            await input_queue.put(residue_line)
+                        tasks = []
+                        for i in range(num_threads):
+                            cpu_proc = await asyncio.create_subprocess_exec(*cpu_ecm_args,
+                                                                            stdout=asyncio.subprocess.PIPE,
+                                                                            stdin=asyncio.subprocess.PIPE,
+                                                                            stderr=asyncio.subprocess.STDOUT,
+                                                                            process_group=0)
+                            tasks.append(asyncio.create_task(handle_stdin(input_queue, cpu_proc.stdin)))
+                            cpu_procs.append(cpu_proc)
+                        all_cpu_processes_done = False
+                        cpu_found_factors = []
+                        count = 0
+                        total_curves = len(residue_lines)
+                        total_curves_digits = len(str(total_curves))
+                        last_time = 0
+                        while not all_cpu_processes_done:
+                            if cpu_found_factors or (pretest and tlev >= pretest):
+                                # kill cpu processes now that we have factor
                                 cancel_tasks(tasks)
                                 await kill_processes(cpu_procs)
-                                await asyncio.sleep(0.1)
-                                loop.stop()
-                                return
-                            if line:
-                                line = line.decode().strip()
-                                # eprint(line)
-                                all_cpu_processes_done = False
-                                if not line.startswith("Step 1") and not line.startswith("Input number is") and not line.startswith("Resuming ECM") and not line.startswith("GMP-ECM") and not line.startswith("Please report internal"):
-                                    if line.startswith("Step 2"):
-                                        count += 1
-                                        now = time.time()
-                                        if now - last_time > 0.1:
-                                            t_level_lines_dict[(old_b1, old_b2)] = (count, total_curves)
-                                            tlev, efs = t_level.get_t_level_and_efs(t_level_lines_dict_to_lines(t_level_lines_dict))
-                                            messages[0] = f"t{tlev:0.3f}, efs: {efs:0.3f}" if tlev else ''
-                                            messages[1] = f"gpu: {gpu_proc.percentage_progress_string()}" if gpu_proc and gpu_proc.has_eta() else ''
-                                            message = f'# {", ".join(filter(bool, messages))}'
-                                            last_time = now
-                                        status_line = f" {count: >{len(str(curves_per_batch))}}/{curves_per_batch}@{old_b1},{old_b2},{param}  {message if count < total_curves else '': <{len(message) + 20}}"
-                                        eprint(f"{status_line: <{shutil.get_terminal_size().columns}}", end="\r")
-                                    elif line.startswith("Using"):
-                                        using_lines[cpu_proc] = line
-                                    elif line.startswith("********** Factor found in step 2:"):
-                                        found_factor = int(line.strip().split(" ")[-1])
-                                        if math.log10(found_factor) >= factor_size_sigma_report_threshold:
-                                            eprint(f"********** BIG ECM STAGE-2 HIT: TELL YOUR FRIENDS! **********")
-                                            eprint(using_lines[cpu_proc])
-                                        cpu_found_factors.append(found_factor)
-                                        found_factors.append(found_factor)
-                                        break
-                                    else:
-                                        eprint(f"unknown line from CPU ECM with b1:{old_b1} b2:{old_b2}:\"{line}\"")
-                                        # eprint(f"sys exit")
-                                        # await shutdown(1)  # not sure how to parse yet
-        await kill_gpu_procs(False)
-        await asyncio.sleep(0.1)
-        loop.stop()
+                                if cpu_found_factors:
+                                    found_factors += cpu_found_factors
+                                    cofactor, found_factors, fully_factored = new_factors_found(input_number, cofactor, found_factors)
+                                    console.log(f"CPU factors found: {','.join(map(str, sorted(found_factors))): <{shutil.get_terminal_size().columns}}")
+                                await asyncio.sleep(0.2)
+                                # break out of CPU loop because factor found
+                                break
+                            all_cpu_processes_done = True
+                            using_lines = {}
+                            for cpu_proc in cpu_procs:
+                                line = await cpu_proc.stdout.readline()
+                                if interrupt_level >= 3:  # stop processing CPU
+                                    t_level_lines_dict[(old_b1, old_b2)] = (count, total_curves)
+                                    tlev, efs = t_level.get_t_level_and_efs(t_level_lines_dict_to_lines(t_level_lines_dict))
+                                    messages[0] = f"t{tlev:0.3f}, efs: {efs:0.3f}" if tlev else ''
+                                    messages[1] = f"gpu: {gpu_proc.percentage_progress_string()}" if gpu_proc else ''
+                                    message = f'# {", ".join(filter(bool, messages))}'
+                                    status_line = f" {count: >{len(str(curves_per_batch))}}/{curves_per_batch}@{old_b1},{old_b2},{param}"
+                                    livetext[-1] = f"{status_line}"
+                                    update()
+                                    cancel_tasks(tasks)
+                                    await kill_processes(cpu_procs)
+                                    await asyncio.sleep(0.1)
+                                    loop.stop()
+                                    return
+                                if line:
+                                    line = line.decode().strip()
+                                    # eprint(line)
+                                    all_cpu_processes_done = False
+                                    if not line.startswith("Step 1") and not line.startswith("Input number is") and not line.startswith("Resuming ECM") and not line.startswith("GMP-ECM") and not line.startswith("Please report internal"):
+                                        if line.startswith("Step 2"):
+                                            count += 1
+                                            now = time.time()
+                                            if now - last_time > 0.1:
+                                                t_level_lines_dict[(old_b1, old_b2)] = (count, total_curves)
+                                                tlev, efs = t_level.get_t_level_and_efs(t_level_lines_dict_to_lines(t_level_lines_dict))
+                                                messages[0] = f"t{tlev:0.3f}, efs: {efs:0.3f}" if tlev else ''
+                                                messages[1] = f"gpu: {gpu_proc.percentage_progress_string()}" if gpu_proc and gpu_proc.has_eta() else ''
+                                                message = f'# {", ".join(filter(bool, messages))}'
+                                                last_time = now
+                                            status_line = f" {count: >{len(str(curves_per_batch))}}/{curves_per_batch}@{old_b1},{old_b2},{param}"
+                                            livetext[-1] = f"{status_line}"
+                                            update()
+                                        elif line.startswith("Using"):
+                                            using_lines[cpu_proc] = line
+                                        elif line.startswith("********** Factor found in step 2:"):
+                                            found_factor = int(line.strip().split(" ")[-1])
+                                            if math.log10(found_factor) >= factor_size_sigma_report_threshold:
+                                                console.log(f"********** BIG ECM STAGE-2 HIT: TELL YOUR FRIENDS! **********")
+                                                console.log(using_lines[cpu_proc])
+                                            cpu_found_factors.append(found_factor)
+                                            found_factors.append(found_factor)
+                                            break
+                                        else:
+                                            console.log(f"unknown line from CPU ECM with b1:{old_b1} b2:{old_b2}:\"{line}\"")
+                                            # eprint(f"sys exit")
+                                            # await shutdown(1)  # not sure how to parse yet
+            await kill_gpu_procs(False)
+            await asyncio.sleep(0.1)
+            loop.stop()
 
 
 
