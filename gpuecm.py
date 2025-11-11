@@ -135,6 +135,11 @@ def get_b1_b2_plan():
         (286200777, 193867139028),
         (471887306, 388561294312),
         (728811011, 782897237972),
+        (728811011, 782897237972),
+        (728811011, 782897237972),
+        (728811011, 782897237972),
+        (728811011, 782897237972),
+        (728811011, 782897237972),
     ]
 
 
@@ -704,7 +709,10 @@ async def main():
                                             found_factor = int(line.strip().split(" ")[-1])
                                             if math.log10(found_factor) >= factor_size_sigma_report_threshold:
                                                 console.log(f"********** BIG ECM STAGE-2 HIT: TELL YOUR FRIENDS! **********")
-                                                console.log(using_lines[cpu_proc])
+                                                if cpu_proc in using_lines:
+                                                    console.log(using_lines[cpu_proc])
+                                                else:
+                                                    console.log(using_lines)
                                             cpu_found_factors.append(found_factor)
                                             found_factors.append(found_factor)
                                             break
