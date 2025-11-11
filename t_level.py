@@ -348,6 +348,19 @@ def get_suggestion_curves_string(input_lines, start_t, end_t, curves_constraint,
     return f"{curves}@{b1_level_string(B1)}{B2}{p}", t_level
 
 
+def get_multiple_suggestion_curves_string(input_lines, start_t, end_t, interval_t, curves_constraint, param, precision):
+    ret_strs = []
+    t_level = start_t
+    num_steps = math.ceil(round((end_t - start_t) / interval_t, 1))
+    t_range = [start_t + i * interval_t for i in range(num_steps)]
+    for inner_start_t in t_range:
+        inner_end_t = min(end_t, inner_start_t + interval_t)
+        curves, B1, B2, param, t_level = get_suggestion_curves(input_lines, inner_start_t, inner_end_t, curves_constraint, None, param, precision)
+        input_lines.append((curves, B1, B2, param))
+        B2 = "" if B2 is None else f",{B2}"
+        p = "" if param == 1 else f",p={param}"
+        ret_strs.append(f"{curves}@{b1_level_string(B1)}{B2}{p}")
+    return ";".join(ret_strs), t_level
 
 
 def get_regression_b1_for_t(end_t):
@@ -552,6 +565,9 @@ def main():
         if args.B1 is not None and args.curve is not None:
             print("-c and -b flags cannot both be used to constrain both curves and B1 simultaneously, exiting...")
             sys.exit(1)
+        if args.B1 is not None and args.work_interval is not None :
+            print("-n and -b flags cannot both be used to constrain both work interval and B1 simultaneously, exiting...")
+            sys.exit(1)
 
     if args.work:
         if args.work < 5 or args.work > 100:
@@ -573,11 +589,19 @@ def main():
         else:
             logging.error(e)
         sys.exit(1)
-    print(f"t{t_level:.{args.precision}f}")
-    if args.efs:
-        print(f"efs:{efs:.{args.precision}f}")
+    if args.expression:
+        print(f"t{t_level:.{args.precision}f}")
+        if args.efs:
+            print(f"efs:{efs:.{args.precision}f}")
     if args.t_level:
-        curves, new_t_level = get_suggestion_curves_string(parsed_lines, t_level, args.t_level, args.curves, args.B1, args.param, args.precision)
+        if args.work_interval:
+            curves, new_t_level = \
+                get_multiple_suggestion_curves_string(parsed_lines, t_level, args.t_level, args.work_interval,
+                                                      args.curves, args.param, args.precision)
+        else:
+            curves, new_t_level = \
+                get_suggestion_curves_string(parsed_lines, t_level, args.t_level, args.curves,
+                                             args.B1, args.param, args.precision)
         print(f"Running the following will get you to t{new_t_level:.{args.precision}f}:")
         print(f"{curves}")
 

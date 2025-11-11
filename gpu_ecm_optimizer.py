@@ -124,7 +124,7 @@ def estimate_remaining_curve_proportion(done_t_level, target_t_level):
 
 def add_t_levels(t1, t2, precision=3):
     t, _ = t_level.convert_string_to_t_level_and_efs(
-        t_level.get_t_level_curves(t1, precision) + ";" + t_level.get_t_level_curves(t2, precision))
+        t_level.get_t_level_curves_string(t1, precision) + ";" + t_level.get_t_level_curves_string(t2, precision))
     return t
 
 
@@ -230,12 +230,12 @@ def optimize_t(previous_curve_strings, GPU_SPEEDUP, CPU_CORES, PARAMETER, compos
 
 
 def optimize():
-    COMPOSITE = 135512287471878204193633596210376549924578479626664178122249113294162659711944754598503615020622210846798939754751372353713360604667619430324232979216887721550925726303
+    COMPOSITE = 16812775516110491653908058537186758412951321036423449917171274730320450385411797138324005921602905859883990534265983575204130265462937467959359009721312927660860633836945917874700367760161130359
     GPU_CORES = 8192
-    CPU_CORES = 16
+    CPU_CORES = 8
     PARAMETER = 3
-    STARTINGT = 50
-    MAXIMUM_T = 65
+    STARTINGT = 0
+    MAXIMUM_T = 60
     GPU_SPEEDUP = load_B1_timing(COMPOSITE) / load_GPU_B1_timing(COMPOSITE, GPU_CORES)
     print(f"GPU Speedup: {GPU_SPEEDUP:.0f}")
     UPPER_SEP = "|-------------------|------------------------------------------------------------------------------------------------------|"
@@ -247,7 +247,7 @@ def optimize():
     print(LOWER_SEP)
     t_total = STARTINGT if STARTINGT > 15 else 0
     sum_time = 0
-    prev_curve_strings = "" if t_total == 0 else t_level.get_t_level_curves(t_total, 3)
+    prev_curve_strings = "" if t_total == 0 else t_level.get_t_level_curves_string(t_total, 3)
     if t_total > 0:
         curves, B1 = prev_curve_strings.split("@")
         print("| {:<0.4f} | {:<0.4f} | {:13} | {:19} | {:4} | {:6} | {:12.1f}s | {:12.1f}s | {:13.1f}s |".format(
