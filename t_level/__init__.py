@@ -589,7 +589,7 @@ def main():
         else:
             logging.error(e)
         sys.exit(1)
-    if args.expression:
+    if args.expression or not sys.stdin.isatty() or args.filename:
         print(f"t{t_level:.{args.precision}f}")
         if args.efs:
             print(f"efs:{efs:.{args.precision}f}")
