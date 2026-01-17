@@ -10,11 +10,8 @@ import pathlib
 from . import rho
 from functools import cache
 
-# to build the binary, download pyinstaller with:
-# pip install -U pyinstaller
-# and run
-# python -m PyInstaller -F --clean --name t-level --add-data=ecmprobs.db:. t_level.py
-# and find the binary in dist
+# To build the binaries, run:
+# python build_binaries.py
 
 
 __license__ = "GPL"
@@ -22,7 +19,17 @@ __version__ = "1.0.0"
 
 __DEFAULT_PRECISION__ = 3
 
-conn = sqlite3.connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ecmprobs.db'), check_same_thread=False)
+if getattr(sys, 'frozen', False):
+    # If the application is run as a bundle, the PyInstaller bootloader
+    # extends the sys module by a flag frozen=True and sets the app 
+    # path into variable _MEIPASS'.
+    application_path = sys._MEIPASS
+    db_path = os.path.join(application_path, 't_level', 'ecmprobs.db')
+else:
+    application_path = os.path.dirname(os.path.abspath(__file__))
+    db_path = os.path.join(application_path, 'ecmprobs.db')
+
+conn = sqlite3.connect(db_path, check_same_thread=False)
 c = conn.cursor()
 
 
@@ -383,8 +390,13 @@ def graph_parsed_lines(work_lines, parsed_lines):
     work_dickman_local = [dickman_local[i] * work_fp[i] for i in range(len(next_sp))]
     next_dickman_local = [dickman_local[i] * next_fp[i] for i in range(len(next_sp))]
     diff_dickman_local = [work_dickman_local[i] - next_dickman_local[i] for i in range(len(next_sp))]
-    import matplotlib.pyplot as plt
-    import numpy as np
+    try:
+        import matplotlib.pyplot as plt
+        import numpy as np
+    except ImportError:
+        print("Graphing features require 'numpy' and 'matplotlib'. Please install them with:\n"
+              "pip install t-level[graph]")
+        sys.exit(1)
 
     plt.rcParams["figure.figsize"] = (10, 3)
     plt.xticks(range(10, 101, 5))

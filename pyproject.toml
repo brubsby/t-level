@@ -3,12 +3,16 @@ name = "t-level"
 description = "Command line utility for calculating the t-level achieved by running a given number of ECM curves."
 dependencies = [
     "gmpy2",
-    "numpy",
-    "matplotlib"
 ]
 dynamic = ["version"]
 readme = "README.md"
 requires-python = ">=3.7"
+
+[project.optional-dependencies]
+graph = [
+    "numpy",
+    "matplotlib"
+]
 
 [project.scripts]
 t-level = "t_level:main"
@@ -21,3 +25,9 @@ version = {attr = "t_level.__version__"}
 
 [tool.setuptools.package-data]
 t_level = ["ecmprobs.db"]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=5.13.2",
+    "twine>=4.0.2",
+]
