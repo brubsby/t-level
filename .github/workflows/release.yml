@@ -37,16 +37,16 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           cd dist
-          zip -r t-level-linux-dir.zip t-level
-          mv t-level-portable t-level-linux-portable
+          cd dir && zip -r ../t-level-linux-dir.zip t-level && cd ..
+          mv portable/t-level t-level-linux-portable
         shell: bash
 
       - name: Prepare Artifacts (Windows)
         if: matrix.os == 'windows-latest'
         run: |
           cd dist
-          Compress-Archive -Path t-level -DestinationPath t-level-windows-dir.zip
-          mv t-level-portable.exe t-level-windows-portable.exe
+          cd dir; Compress-Archive -Path t-level -DestinationPath ..\t-level-windows-dir.zip; cd ..
+          mv portable/t-level.exe t-level-windows-portable.exe
         shell: pwsh
 
       - name: Upload Release Assets

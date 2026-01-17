@@ -34,21 +34,21 @@ def main():
     ]
 
     # Build Directory Version (Standard)
-    # Output: dist/t-level/t-level
+    # Output: dist/dir/t-level/t-level
     print("\nBuilding Directory Version...")
-    subprocess.run(common_args + ["--onedir", "--name", "t-level"], check=True)
+    subprocess.run(common_args + ["--onedir", "--name", "t-level", "--distpath", os.path.join("dist", "dir")], check=True)
 
     # Build Single File Version (Portable)
-    # Output: dist/t-level-portable
+    # Output: dist/portable/t-level
     print("\nBuilding Single File Version (Portable)...")
-    subprocess.run(common_args + ["--onefile", "--name", "t-level-portable"], check=True)
+    subprocess.run(common_args + ["--onefile", "--name", "t-level", "--distpath", os.path.join("dist", "portable")], check=True)
 
     # Cleanup
     print("\nCleaning up...")
     if os.path.exists(entry_script):
         os.remove(entry_script)
     
-    for spec in ["t-level.spec", "t-level-portable.spec"]:
+    for spec in ["t-level.spec"]:
         if os.path.exists(spec):
             os.remove(spec)
 
@@ -57,8 +57,8 @@ def main():
     print("="*50)
     
     dist_dir = os.path.join("dist")
-    dir_exe = os.path.join(dist_dir, "t-level", "t-level")
-    portable_exe = os.path.join(dist_dir, "t-level-portable")
+    dir_exe = os.path.join(dist_dir, "dir", "t-level", "t-level")
+    portable_exe = os.path.join(dist_dir, "portable", "t-level")
     
     if platform.system() == "Windows":
         dir_exe += ".exe"
