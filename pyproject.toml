@@ -3,11 +3,21 @@ name = "t-level"
 description = "Command line utility for calculating the t-level achieved by running a given number of ECM curves."
 dependencies = [
     "gmpy2",
-    "aiofiles",
-    "scipy"
+    "numpy",
+    "matplotlib"
 ]
 dynamic = ["version"]
+readme = "README.md"
+requires-python = ">=3.7"
+
 [project.scripts]
 t-level = "t_level:main"
+
 [tool.setuptools]
-py-modules = ["t_level", "rho"]
+packages = ["t_level"]
+
+[tool.setuptools.dynamic]
+version = {attr = "t_level.__version__"}
+
+[tool.setuptools.package-data]
+t_level = ["ecmprobs.db"]

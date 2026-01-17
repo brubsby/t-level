@@ -7,7 +7,7 @@ import sys
 import os
 import sqlite3
 import pathlib
-import rho
+from . import rho
 from functools import cache
 
 # to build the binary, download pyinstaller with:
