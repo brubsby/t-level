@@ -16,6 +16,22 @@ uv tool install t-level
 pip install t-level
 ```
 
+## Binary Releases
+
+Standalone binaries for Linux and Windows are available on the [GitHub Releases page](https://github.com/brubsby/t-level/releases).
+
+There are two versions available for each platform:
+
+1.  **Directory Version (Recommended for Speed):**
+    *   **Filename:** `t-level-{os}-dir.zip`
+    *   **Startup Speed:** Instant (~0.2s).
+    *   **Format:** A zip file containing a folder. You must extract it and run the `t-level` executable inside.
+    
+2.  **Portable Version (Single File):**
+    *   **Filename:** `t-level-{os}-portable` (Linux) or `t-level-{os}-portable.exe` (Windows)
+    *   **Startup Speed:** Slower (~0.7s delay on every run).
+    *   **Format:** A single executable file. Easier to share, but requires unpacking internal data to a temporary directory on every execution.
+
 ## Usage
 
 ```bash
@@ -42,4 +58,3 @@ Multiple curve strings must be delimited by semicolons or newlines.
 
 See `t-level --help` for more details.
 
-```
