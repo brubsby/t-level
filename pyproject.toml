@@ -6,13 +6,7 @@ dependencies = [
 ]
 dynamic = ["version"]
 readme = "README.md"
-requires-python = ">=3.7"
-
-[project.optional-dependencies]
-graph = [
-    "numpy",
-    "matplotlib"
-]
+requires-python = ">=3.9"
 
 [project.scripts]
 t-level = "t_level:main"
@@ -30,4 +24,6 @@ t_level = ["ecmprobs.db"]
 dev = [
     "pyinstaller>=5.13.2",
     "twine>=4.0.2",
+    "numpy>=1.26.0",
+    "matplotlib>=3.8.0",
 ]

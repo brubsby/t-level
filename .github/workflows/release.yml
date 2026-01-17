@@ -1,0 +1,58 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build binaries on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: |
+          uv sync --group dev
+        shell: bash
+
+      - name: Build Binaries
+        run: |
+          uv run build_binaries.py
+        shell: bash
+
+      - name: Prepare Artifacts (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cd dist
+          zip -r t-level-linux-dir.zip t-level
+          mv t-level-portable t-level-linux-portable
+        shell: bash
+
+      - name: Prepare Artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          cd dist
+          Compress-Archive -Path t-level -DestinationPath t-level-windows-dir.zip
+          mv t-level-portable.exe t-level-windows-portable.exe
+        shell: pwsh
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            dist/*.zip
+            dist/*-portable*

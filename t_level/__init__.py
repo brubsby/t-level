@@ -7,6 +7,7 @@ import sys
 import os
 import sqlite3
 import pathlib
+import importlib.util
 from . import rho
 from functools import cache
 
@@ -390,13 +391,8 @@ def graph_parsed_lines(work_lines, parsed_lines):
     work_dickman_local = [dickman_local[i] * work_fp[i] for i in range(len(next_sp))]
     next_dickman_local = [dickman_local[i] * next_fp[i] for i in range(len(next_sp))]
     diff_dickman_local = [work_dickman_local[i] - next_dickman_local[i] for i in range(len(next_sp))]
-    try:
-        import matplotlib.pyplot as plt
-        import numpy as np
-    except ImportError:
-        print("Graphing features require 'numpy' and 'matplotlib'. Please install them with:\n"
-              "pip install t-level[graph]")
-        sys.exit(1)
+    import matplotlib.pyplot as plt
+    import numpy as np
 
     plt.rcParams["figure.figsize"] = (10, 3)
     plt.xticks(range(10, 101, 5))
@@ -537,13 +533,19 @@ def main():
         type=str,
         help="constrain suggested B1 to a value, use with -t"
     )
-    parser.add_argument(
-        "-g",
-        "--graph",
-        action="store_true",
-        dest="graph",
-        help="use matplotlib to visualize the probability density functions"
-    )
+
+    graphing_available = (importlib.util.find_spec("matplotlib") is not None and
+                          importlib.util.find_spec("numpy") is not None)
+
+    if graphing_available:
+        parser.add_argument(
+            "-g",
+            "--graph",
+            action="store_true",
+            dest="graph",
+            help="use matplotlib to visualize the probability density functions"
+        )
+
     args = parser.parse_args()
 
     loglevel = logging.WARNING
@@ -591,7 +593,7 @@ def main():
     input_string = "\n".join(curve_inputs).strip()
     try:
         parsed_lines = convert_string_to_parsed_lines(input_string)
-        if args.graph:
+        if getattr(args, 'graph', False):
             parsed_work_lines = convert_string_to_parsed_lines(work_input) if args.work else ""
             graph_parsed_lines(parsed_work_lines, parsed_lines)
         t_level, efs = convert_lines_to_t_level_and_efs(parsed_lines)

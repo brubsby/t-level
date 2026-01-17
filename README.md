@@ -2,6 +2,20 @@
 
 Command line utility for calculating the t-level achieved by running a given number of ECM curves.
 
+## Installation
+
+### Using uv (Recommended)
+
+```bash
+uv tool install t-level
+```
+
+### Using pip
+
+```bash
+pip install t-level
+```
+
 ## Usage
 
 ```bash
