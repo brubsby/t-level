@@ -18,7 +18,7 @@ from functools import cache
 
 
 __license__ = "GPL"
-__version__ = "0.9.7"
+__version__ = "1.0.0"
 
 __DEFAULT_PRECISION__ = 3
 
